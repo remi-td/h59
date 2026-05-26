@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h59-local"
+version = "0.0.1"
+description = "CLI tools for privacy-first local collection and analysis of H59 smart band data"
+readme = "README.md"
+authors = [ { name = "Research", email = "noreply@example.com" } ]
+requires-python = ">=3.9"
+dependencies = [
+	"bleak>=0.22.3"
+]
+
+[project.scripts]
+h59 = "h59_client.cli:main"
+h59-sync = "h59_client.cli:legacy_sync_main"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-q"
+testpaths = ["tests"]
