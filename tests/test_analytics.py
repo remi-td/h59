@@ -1,14 +1,8 @@
 import sqlite3
-import os
-import datetime
 from h59_client import analytics
 
 
 def _open_db():
-    path = os.path.join(os.getcwd(), "data", "h59.sqlite")
-    if os.path.exists(path):
-        return sqlite3.connect(path)
-    # create a small in-memory DB with expected schema
     conn = sqlite3.connect(":memory:")
     conn.execute(
         """CREATE TABLE sport_details(
