@@ -1,7 +1,19 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
-from h59_client.protocol import ActivityBlock, BatteryStatus, HeartRateDay, HeartRateLogSettings, RealTimeSample
-from h59_client.storage import H59Database
+from h59_client.protocol import (
+    ActivityBlock,
+    BatteryStatus,
+    BloodOxygenHistory,
+    BloodOxygenSample,
+    HeartRateDay,
+    HeartRateLogSettings,
+    HrvHistory,
+    PressureHistory,
+    RealTimeSample,
+    SleepPeriod,
+    SleepSession,
+)
+from h59_client.storage import H59Database, utc_text
 
 
 def test_storage_records_raw_and_decoded_data(tmp_path):
@@ -12,9 +24,9 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
         advertisement={"local_name": "H59_DEMO"},
         hw_version="H59_V2.2",
         fw_version="H59_2.20.02_260319",
-        last_seen_at="2026-05-25T19:00:00+00:00",
+        last_seen_at="2026-05-25T21:00:00+02:00",
     )
-    sync_id = db.create_sync(device_id, started_at="2026-05-25T19:00:00+00:00", source="test")
+    sync_id = db.create_sync(device_id, started_at="2026-05-25T21:00:00+02:00", source="test")
 
     db.record_gatt_snapshot(
         device_id,
@@ -92,9 +104,56 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
         observed_at="2026-05-25T19:00:06+00:00",
         samples=[(RealTimeSample(metric="spo2", value=0, error_code=0), "690300...")],
     )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id,
+        reference=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=10,
+                sleep_start_minutes=1380,
+                sleep_end_minutes=360,
+                periods=[SleepPeriod(stage="light", minutes=120), SleepPeriod(stage="deep", minutes=120)],
+            )
+        ],
+        raw_packet_hex="bc27...",
+        source_command=39,
+    )
+    db.record_blood_oxygen_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=BloodOxygenHistory(
+            unknown_flag=1,
+            samples=[
+                BloodOxygenSample(min_percent=97, max_percent=99),
+                BloodOxygenSample(min_percent=0, max_percent=0),
+            ],
+        ),
+        raw_packet_hex="bc2a...",
+        source_command=42,
+    )
+    db.record_pressure_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=PressureHistory(values=[43, 41, 0], range_minutes=30),
+        raw_packet_hex="37...",
+        source_command=55,
+    )
+    db.record_hrv_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=HrvHistory(values=[47, 44, 0], range_minutes=30),
+        raw_packet_hex="39...",
+        source_command=57,
+    )
     db.finish_sync(sync_id, finished_at="2026-05-25T19:00:07+00:00")
 
     conn = db.connection
+    assert conn.execute("SELECT value FROM database_metadata WHERE key='timestamp_timezone'").fetchone()[0] == "UTC"
     assert conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM syncs").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM gatt_characteristics").fetchone()[0] == 1
@@ -106,6 +165,12 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM sport_details").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM heart_rates").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM realtime_samples").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM sleep_stage_samples").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM blood_oxygen_samples").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM pressure_samples").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0] == 2
+    assert conn.execute("SELECT last_seen_at FROM devices WHERE device_id=?", (device_id,)).fetchone()[0] == "2026-05-25T19:00:00+00:00"
 
     db.close()
 
@@ -165,3 +230,16 @@ def test_storage_allows_repeated_gatt_snapshots_for_same_device(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM gatt_reads").fetchone()[0] == 2
 
     db.close()
+
+
+def test_utc_text_normalizes_offsets_and_rejects_naive_values():
+    assert utc_text("2026-05-26T17:00:00+02:00") == "2026-05-26T15:00:00+00:00"
+    aware = datetime(2026, 5, 26, 17, 0, tzinfo=timezone(timedelta(hours=2)))
+    assert utc_text(aware) == "2026-05-26T15:00:00+00:00"
+
+    try:
+        utc_text("2026-05-26T15:00:00")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected naive timestamp to be rejected")

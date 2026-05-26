@@ -214,3 +214,21 @@ class BigDataTransport:
         for _ in range(expected):
             packets.append(await asyncio.wait_for(queue.get(), timeout=timeout))
         return packets
+
+    async def read_data_payload(
+        self,
+        data_id: int,
+        *,
+        timeout: float = 3.0,
+    ) -> tuple[bytes, str]:
+        queue = self.queues.setdefault(data_id, asyncio.Queue())
+        first, observed_at = await asyncio.wait_for(queue.get(), timeout=timeout)
+        payload = bytearray(first)
+        if len(payload) < 6 or payload[0] != BIGDATA_MAGIC:
+            return bytes(payload), observed_at
+
+        data_len = int.from_bytes(payload[2:4], "little")
+        while len(payload) < 6 + data_len:
+            chunk, _chunk_observed_at = await asyncio.wait_for(queue.get(), timeout=timeout)
+            payload.extend(chunk)
+        return bytes(payload), observed_at

@@ -10,24 +10,37 @@ from typing import Any
 from bleak import BleakClient
 
 from h59_client import date_utils
-from h59_client.ble import PacketTransport, discover_h59, ensure_services, enumerate_services
+from h59_client.ble import BigDataTransport, PacketTransport, discover_h59, ensure_services, enumerate_services
 from h59_client.protocol import (
     BATTERY_PACKET,
+    BIGDATA_BLOOD_OXYGEN_ID,
+    BIGDATA_SLEEP_ID,
+    BIGDATA_SERVICE_UUID,
     CMD_BATTERY,
+    CMD_HRV_HISTORY,
+    CMD_PRESSURE_HISTORY,
     CMD_HEART_RATE_LOG_SETTINGS,
     CMD_READ_HEART_RATE,
     CMD_START_REAL_TIME,
     CMD_GET_STEP_SOMEDAY,
     READ_HEART_RATE_LOG_SETTINGS_PACKET,
     ActivityBlockParser,
+    BIGDATA_MAGIC,
     HeartRateDayParser,
+    HrvHistoryParser,
     NoData,
+    PressureHistoryParser,
     REALTIME_NAME_MAP,
+    bigdata_request_packet,
     parse_battery,
+    parse_bigdata_blood_oxygen,
+    parse_bigdata_sleep,
     parse_capabilities,
     parse_heart_rate_log_settings,
     parse_realtime_packet,
+    read_hrv_history_packet,
     read_heart_rate_packet,
+    read_pressure_history_packet,
     read_steps_packet,
     set_time_packet,
     start_realtime_packet,
@@ -97,6 +110,46 @@ async def _query_capabilities(transport: PacketTransport):
     return parse_capabilities(packet), packet.hex(), observed_at
 
 
+async def _query_pressure_history(transport: PacketTransport, *, target: datetime):
+    parser = PressureHistoryParser()
+    await transport.send_packet(read_pressure_history_packet())
+    packets: list[str] = []
+    observed_at = date_utils.utc_now().isoformat()
+    while True:
+        packet, observed_at = (await transport.read_command_packets(CMD_PRESSURE_HISTORY))[0]
+        packets.append(packet.hex())
+        parsed = parser.parse(packet)
+        if parsed is None:
+            continue
+        return parsed, packets, observed_at, target
+
+
+async def _query_hrv_history(transport: PacketTransport, *, target: datetime):
+    parser = HrvHistoryParser()
+    await transport.send_packet(read_hrv_history_packet())
+    packets: list[str] = []
+    observed_at = date_utils.utc_now().isoformat()
+    while True:
+        packet, observed_at = (await transport.read_command_packets(CMD_HRV_HISTORY))[0]
+        packets.append(packet.hex())
+        parsed = parser.parse(packet)
+        if parsed is None:
+            continue
+        return parsed, packets, observed_at, target
+
+
+async def _query_bigdata_sleep(transport: BigDataTransport):
+    await transport.send_packet(bigdata_request_packet(BIGDATA_SLEEP_ID))
+    payload, observed_at = await transport.read_data_payload(BIGDATA_SLEEP_ID)
+    return parse_bigdata_sleep(payload), payload.hex(), observed_at
+
+
+async def _query_bigdata_blood_oxygen(transport: BigDataTransport, *, target: datetime):
+    await transport.send_packet(bigdata_request_packet(BIGDATA_BLOOD_OXYGEN_ID))
+    payload, observed_at = await transport.read_data_payload(BIGDATA_BLOOD_OXYGEN_ID)
+    return parse_bigdata_blood_oxygen(payload), payload.hex(), observed_at, target
+
+
 async def _query_realtime(transport: PacketTransport, metric_name: str, *, samples: int):
     metric = REALTIME_NAME_MAP[metric_name]
     await transport.send_packet(start_realtime_packet(metric))
@@ -161,7 +214,12 @@ async def sync_h59(
             database.record_gatt_snapshot(device_id, sync_id, observed_at=now.isoformat(), services=services)
 
             def record_packet(direction: str, channel_uuid: str, payload: bytearray, observed_at: str) -> None:
-                command_id = payload[0] if payload else None
+                command_id = None
+                if payload:
+                    if payload[0] == BIGDATA_MAGIC and len(payload) > 1:
+                        command_id = payload[1]
+                    else:
+                        command_id = payload[0] & 127
                 database.record_raw_packet(
                     device_id,
                     sync_id,
@@ -173,7 +231,11 @@ async def sync_h59(
                 )
 
             transport = PacketTransport(client, packet_callback=record_packet)
+            bigdata_transport: BigDataTransport | None = None
             await transport.start()
+            if client.services.get_service(BIGDATA_SERVICE_UUID) is not None:
+                bigdata_transport = BigDataTransport(client, packet_callback=record_packet)
+                await bigdata_transport.start()
             try:
                 battery_sample, battery_packet_hex, battery_ts = await _query_battery(transport)
                 database.record_battery(device_id, sync_id, timestamp=battery_ts, sample=battery_sample, raw_packet_hex=battery_packet_hex)
@@ -196,6 +258,54 @@ async def sync_h59(
                         capabilities=capabilities,
                         raw_packet_hex=capability_packet_hex,
                     )
+
+                pressure_history, pressure_packets, _pressure_ts, pressure_target = await _query_pressure_history(transport, target=now)
+                if not isinstance(pressure_history, NoData):
+                    database.record_pressure_history(
+                        device_id,
+                        sync_id,
+                        target=pressure_target,
+                        history=pressure_history,
+                        raw_packet_hex=",".join(pressure_packets),
+                        source_command=CMD_PRESSURE_HISTORY,
+                    )
+
+                hrv_history, hrv_packets, _hrv_ts, hrv_target = await _query_hrv_history(transport, target=now)
+                if not isinstance(hrv_history, NoData):
+                    database.record_hrv_history(
+                        device_id,
+                        sync_id,
+                        target=hrv_target,
+                        history=hrv_history,
+                        raw_packet_hex=",".join(hrv_packets),
+                        source_command=CMD_HRV_HISTORY,
+                    )
+
+                if bigdata_transport is not None:
+                    sleep_sessions, sleep_payload_hex, _sleep_ts = await _query_bigdata_sleep(bigdata_transport)
+                    if sleep_sessions:
+                        database.record_sleep_sessions(
+                            device_id,
+                            sync_id,
+                            reference=now,
+                            sessions=sleep_sessions,
+                            raw_packet_hex=sleep_payload_hex,
+                            source_command=BIGDATA_SLEEP_ID,
+                        )
+
+                    blood_oxygen_history, blood_oxygen_payload_hex, _bo_ts, blood_oxygen_target = await _query_bigdata_blood_oxygen(
+                        bigdata_transport,
+                        target=now,
+                    )
+                    if blood_oxygen_history.samples:
+                        database.record_blood_oxygen_history(
+                            device_id,
+                            sync_id,
+                            target=blood_oxygen_target,
+                            history=blood_oxygen_history,
+                            raw_packet_hex=blood_oxygen_payload_hex,
+                            source_command=BIGDATA_BLOOD_OXYGEN_ID,
+                        )
 
                 targets = determine_sync_dates(now=now, last_sync_at=last_sync_at, incremental=incremental)
                 for target in targets:
@@ -230,6 +340,8 @@ async def sync_h59(
                                 samples=[(sample, raw_packet_hex) for sample, raw_packet_hex, _ in samples],
                             )
             finally:
+                if bigdata_transport is not None:
+                    await bigdata_transport.stop()
                 await transport.stop()
                 database.finish_sync(sync_id, finished_at=date_utils.utc_now().isoformat())
 

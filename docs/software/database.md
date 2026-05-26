@@ -13,7 +13,21 @@ It is designed to support both:
 1. Keep device and sync provenance explicit.
 2. Store decoded history in simple queryable tables.
 3. Preserve raw packets and GATT snapshots for future reverse-engineering.
-4. Make room for sleep and additional health metrics as first-class tables.
+4. Keep timestamp storage unambiguous and UTC-only.
+
+## Timestamp Policy
+
+SQLite does not have a native timezone-aware timestamp type.
+
+This project therefore uses:
+- ISO-8601 `TEXT` timestamps
+- explicit `+00:00` UTC offsets
+- application-side normalization to UTC before insert
+- `database_metadata.timestamp_timezone = UTC`
+
+Practical consequence:
+- all stored timestamps are UTC
+- local-day rendering must be done in the analytics or dashboard layer
 
 ## Core Tables
 
@@ -24,6 +38,7 @@ It is designed to support both:
 
 ## Supporting Tables
 
+- `database_metadata`
 - `battery_samples`
 - `heart_rate_settings`
 - `capability_snapshots`
@@ -32,6 +47,10 @@ It is designed to support both:
 - `gatt_reads`
 - `raw_packets`
 - `sleep_sessions`
+- `sleep_stage_samples`
+- `blood_oxygen_samples`
+- `pressure_samples`
+- `hrv_samples`
 
 ## Mermaid ER Diagram
 
@@ -47,6 +66,10 @@ erDiagram
     devices ||--o{ raw_packets : emits
     devices ||--o{ gatt_characteristics : exposes
     devices ||--o{ sleep_sessions : has
+    devices ||--o{ sleep_stage_samples : has
+    devices ||--o{ blood_oxygen_samples : has
+    devices ||--o{ pressure_samples : has
+    devices ||--o{ hrv_samples : has
 
     syncs ||--o{ heart_rates : captures
     syncs ||--o{ sport_details : captures
@@ -57,8 +80,13 @@ erDiagram
     syncs ||--o{ raw_packets : captures
     syncs ||--o{ gatt_reads : captures
     syncs ||--o{ sleep_sessions : captures
+    syncs ||--o{ sleep_stage_samples : captures
+    syncs ||--o{ blood_oxygen_samples : captures
+    syncs ||--o{ pressure_samples : captures
+    syncs ||--o{ hrv_samples : captures
 
     gatt_characteristics ||--o{ gatt_reads : has
+    sleep_sessions ||--o{ sleep_stage_samples : contains
 ```
 
 ## Table Roles
@@ -92,49 +120,52 @@ Key fields:
 
 Historical heart-rate samples decoded from the bracelet.
 
-Key fields:
-- `timestamp`
-- `reading`
-- `device_id`
-- `sync_id`
-- `source_command`
-- `raw_packet_hex`
-
 ### `sport_details`
 
 Historical activity bins decoded from the bracelet.
 
+### `sleep_sessions`
+
+Decoded nightly sleep sessions.
+
 Key fields:
-- `timestamp`
-- `time_index`
-- `steps`
-- `distance`
-- `calories`
-- `device_id`
-- `sync_id`
-- `source_command`
-- `raw_packet_hex`
+- `start_timestamp`
+- `end_timestamp`
+- `total_minutes`
+- `is_provisional`
+- `raw_json`
+
+### `sleep_stage_samples`
+
+Decoded sleep stage periods linked to a session.
+
+Key fields:
+- `sleep_session_id`
+- `sequence_index`
+- `stage`
+- `start_timestamp`
+- `end_timestamp`
+- `minutes`
+- `is_provisional`
+
+### `blood_oxygen_samples`
+
+Historical SpO2 min/max sample pairs.
+
+Current note:
+- timing/header semantics are still provisional
+
+### `pressure_samples`
+
+Historical pressure or stress-like score samples.
+
+### `hrv_samples`
+
+Historical HRV-like samples.
 
 ### `raw_packets`
 
 Every captured protocol packet, for replay and future decoding.
-
-Key fields:
-- `timestamp`
-- `direction`
-- `channel_uuid`
-- `command_id`
-- `packet_hex`
-- `device_id`
-- `sync_id`
-
-### `sleep_sessions`
-
-Reserved for decoded sleep summaries.
-
-Current status:
-- schema exists
-- decoder is still under active implementation
 
 ## Indexing and Deduplication
 
@@ -143,10 +174,16 @@ Current uniqueness rules:
 - `heart_rates(device_id, timestamp)`
 - `sport_details(device_id, timestamp)`
 - `gatt_characteristics(device_id, char_uuid, handle)`
+- `sleep_sessions(device_id, source_command, raw_json)`
+- `sleep_stage_samples(sleep_session_id, sequence_index)`
+- `blood_oxygen_samples(device_id, timestamp, source_command)`
+- `pressure_samples(device_id, timestamp, source_command)`
+- `hrv_samples(device_id, timestamp, source_command)`
 
 This supports:
 - incremental sync overlap
 - idempotent re-sync of already-seen days
+- provisional parser upgrades without losing raw evidence
 
 ## Compatibility Mapping
 

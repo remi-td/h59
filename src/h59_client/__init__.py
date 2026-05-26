@@ -13,6 +13,7 @@ def summary_from_db(conn):
     cur = conn.cursor()
     out = {}
     for t in (
+        "database_metadata",
         "devices",
         "syncs",
         "heart_rates",
@@ -22,6 +23,11 @@ def summary_from_db(conn):
         "capability_snapshots",
         "realtime_samples",
         "raw_packets",
+        "sleep_sessions",
+        "sleep_stage_samples",
+        "blood_oxygen_samples",
+        "pressure_samples",
+        "hrv_samples",
     ):
         try:
             cur.execute(f"SELECT COUNT(*) FROM \"{t}\"")

@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 from h59_client.protocol import (
     ActivityBlockParser,
+    HrvHistoryParser,
     HeartRateDayParser,
+    PressureHistoryParser,
+    parse_bigdata_blood_oxygen,
+    parse_bigdata_sleep,
     parse_battery,
     parse_capabilities,
     parse_heart_rate_log_settings,
@@ -105,3 +109,72 @@ def test_parse_realtime_packet():
     parsed = parse_realtime_packet(bytearray.fromhex("6903000000000000000000000000006c"))
     assert parsed.metric == "spo2"
     assert parsed.value == 0
+
+
+def test_parse_pressure_history_packets():
+    parser = PressureHistoryParser()
+    packets = [
+        "3700051e00000000000000000000005a",
+        "3701002b29412e2f302d28303c331b69",
+        "3702252d3d25232d311f29302f2a1e5d",
+        "37032531301f2f27312f2527292b275c",
+        "370440222c2c000000000000000000f5",
+    ]
+
+    result = None
+    for packet in packets:
+        result = parser.parse(bytearray.fromhex(packet))
+
+    assert result is not None
+    assert result.range_minutes == 30
+    assert result.values[:5] == [43, 41, 65, 46, 47]
+    assert len([value for value in result.values if value]) == 42
+
+
+def test_parse_hrv_history_packets():
+    parser = HrvHistoryParser()
+    packets = [
+        "3900051e00000000000000000000005c",
+        "3901002f002c002d002b003200240043",
+        "39022b002d002d00290030002e002d74",
+        "3903001e002a001e002c001e002f001b",
+        "39043100260000000000000000000094",
+    ]
+
+    result = None
+    for packet in packets:
+        result = parser.parse(bytearray.fromhex(packet))
+
+    assert result is not None
+    assert result.range_minutes == 30
+    assert result.values[:5] == [47, 44, 45, 43, 50]
+    assert [value for value in result.values if value][-1] == 38
+
+
+def test_parse_bigdata_sleep_payload():
+    payload = bytes.fromhex(
+        "bc275b005cf502012c8305ce01022603140212041102160412022003100224040e031204160209033a041b0233040c020d050a0228002a9a059d010219040f0318022204120210041203140412032d0233041a021e041b02120418020105030206"
+    )
+
+    sessions = parse_bigdata_sleep(payload)
+
+    assert len(sessions) == 2
+    assert sessions[0].days_ago == 1
+    assert sessions[0].periods[0].stage == "light"
+    assert sessions[0].periods[0].minutes == 38
+    start_ts, end_ts = sessions[0].resolved_bounds(datetime(2026, 5, 26, 20, 58, 20, tzinfo=UTC))
+    assert start_ts == datetime(2026, 5, 25, 23, 31, tzinfo=UTC)
+    assert end_ts == datetime(2026, 5, 26, 7, 42, tzinfo=UTC)
+
+
+def test_parse_bigdata_blood_oxygen_payload():
+    payload = bytes.fromhex(
+        "bc2a6200933e0161616161636361616262626262626161636363636161626260606363636360606060606061616262626200006262636300636363636363616161616363636361616060636361616363636363636161636360606363636362626161000000000000"
+    )
+
+    history = parse_bigdata_blood_oxygen(payload)
+
+    assert history.unknown_flag == 1
+    assert len(history.samples) > 40
+    assert history.samples[0].min_percent == 97
+    assert history.samples[0].max_percent == 97

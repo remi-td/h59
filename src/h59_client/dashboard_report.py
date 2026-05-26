@@ -220,6 +220,14 @@ def _sleep_summary(conn: sqlite3.Connection, device_id: int, report_date: str) -
         """,
         (device_id,),
     ).fetchone()
+    stage_total = conn.execute(
+        """
+        SELECT COUNT(*) AS count_value
+        FROM sleep_stage_samples
+        WHERE device_id=?
+        """,
+        (device_id,),
+    ).fetchone()["count_value"]
     duration_minutes = None
     if latest_row and latest_row["start_timestamp"] and latest_row["end_timestamp"]:
         start_dt = _parse_iso(latest_row["start_timestamp"])
@@ -234,7 +242,24 @@ def _sleep_summary(conn: sqlite3.Connection, device_id: int, report_date: str) -
         "latest_state": latest_row["state"] if latest_row else None,
         "latest_score": latest_row["score"] if latest_row else None,
         "latest_duration_minutes": duration_minutes,
+        "stage_total": int(stage_total),
     }
+
+
+def _historical_metric_counts(conn: sqlite3.Connection, device_id: int, report_date: str) -> dict[str, int]:
+    queries = {
+        "blood_oxygen_daily": "SELECT COUNT(*) FROM blood_oxygen_samples WHERE device_id=? AND date(timestamp)=?",
+        "blood_oxygen_total": "SELECT COUNT(*) FROM blood_oxygen_samples WHERE device_id=?",
+        "pressure_daily": "SELECT COUNT(*) FROM pressure_samples WHERE device_id=? AND date(timestamp)=?",
+        "pressure_total": "SELECT COUNT(*) FROM pressure_samples WHERE device_id=?",
+        "hrv_daily": "SELECT COUNT(*) FROM hrv_samples WHERE device_id=? AND date(timestamp)=?",
+        "hrv_total": "SELECT COUNT(*) FROM hrv_samples WHERE device_id=?",
+    }
+    output: dict[str, int] = {}
+    for key, query in queries.items():
+        params: tuple[Any, ...] = (device_id, report_date) if "daily" in key else (device_id,)
+        output[key] = int(conn.execute(query, params).fetchone()[0])
+    return output
 
 
 def _latest_realtime_by_metric(conn: sqlite3.Connection, device_id: int) -> dict[str, dict[str, Any]]:
@@ -393,6 +418,7 @@ def _coverage_rows(
     steps: dict[str, Any],
     heart_rate: dict[str, Any],
     sleep: dict[str, Any],
+    historical_metrics: dict[str, int],
     realtime: dict[str, dict[str, Any]],
     sessions: list[dict[str, Any]],
     battery: dict[str, Any],
@@ -424,43 +450,55 @@ def _coverage_rows(
         (
             "Sleep",
             _status_label(sleep_data, partial=False),
-            "No decoded sleep sessions in current database" if not sleep_data else "Sleep sessions available",
-            "Missing" if not sleep_data else "Partial",
-            "Need sleep decoder or local inference rules from motion + heart rate",
+            "No decoded sleep sessions in current database" if not sleep_data else "Sleep sessions and staged periods available",
+            "Missing" if not sleep_data else "Available",
+            "Stage semantics still provisional for some values; local-day presentation rules are still missing",
         )
     )
 
     spo2_supported = bool(capabilities.get("support_spo2"))
-    spo2_data = "spo2" in realtime
+    spo2_data = historical_metrics["blood_oxygen_total"] > 0 or "spo2" in realtime
     rows.append(
         (
             "Blood oxygen / SpO2",
             _status_label(spo2_data, partial=spo2_supported),
-            "Realtime samples only" if spo2_data else ("Device advertises support, but no samples are stored" if spo2_supported else "No capture path proven"),
+            (
+                f"Historical min/max samples available ({historical_metrics['blood_oxygen_daily']} for selected day)"
+                if historical_metrics["blood_oxygen_total"] > 0
+                else ("Realtime samples only" if "spo2" in realtime else ("Device advertises support, but no samples are stored" if spo2_supported else "No capture path proven"))
+            ),
             "Missing" if not spo2_data else "Partial",
-            "No historical sync path, no daily range logic, no night-time minimum logic",
+            "Sample timing and header semantics are still provisional; no night-time minimum rule yet",
         )
     )
 
     hrv_supported = bool(capabilities.get("support_hrv"))
-    hrv_data = "hrv" in realtime
+    hrv_data = historical_metrics["hrv_total"] > 0 or "hrv" in realtime
     rows.append(
         (
             "HRV",
             _status_label(hrv_data, partial=hrv_supported),
-            "Realtime samples only" if hrv_data else ("Device advertises support, but no samples are stored" if hrv_supported else "No capture path proven"),
+            (
+                f"Historical samples available ({historical_metrics['hrv_daily']} for selected day)"
+                if historical_metrics["hrv_total"] > 0
+                else ("Realtime samples only" if "hrv" in realtime else ("Device advertises support, but no samples are stored" if hrv_supported else "No capture path proven"))
+            ),
             "Missing" if not hrv_data else "Partial",
-            "No historical sync path, no baseline logic, vendor formula unknown",
+            "No baseline logic yet; vendor formula and physiological meaning still need validation",
         )
     )
 
-    stress_data = "pressure" in realtime or "fatigue" in realtime
+    stress_data = historical_metrics["pressure_total"] > 0 or "pressure" in realtime or "fatigue" in realtime
     stress_supported = bool(capabilities.get("support_pressure"))
     rows.append(
         (
             "Stress",
             _status_label(stress_data, partial=stress_supported),
-            "Pressure/fatigue realtime endpoint only" if stress_data else ("Stress-like capability advertised, but not decoded into dashboard semantics" if stress_supported else "No capture path proven"),
+            (
+                f"Historical pressure/stress-like samples available ({historical_metrics['pressure_daily']} for selected day)"
+                if historical_metrics["pressure_total"] > 0
+                else ("Pressure/fatigue realtime endpoint only" if stress_data else ("Stress-like capability advertised, but not decoded into dashboard semantics" if stress_supported else "No capture path proven"))
+            ),
             "Missing" if not stress_data else "Partial",
             "Need mapping from device metric to stress score and label",
         )
@@ -538,6 +576,7 @@ def render_health_dashboard_report(
         steps = _daily_steps(conn, ctx.device_id, ctx.report_date)
         heart_rate = _daily_heart_rate(conn, ctx.device_id, ctx.report_date)
         sleep = _sleep_summary(conn, ctx.device_id, ctx.report_date)
+        historical_metrics = _historical_metric_counts(conn, ctx.device_id, ctx.report_date)
         realtime = _latest_realtime_by_metric(conn, ctx.device_id)
         syncs = _sync_summary(conn, ctx.device_id)
         battery = _battery_summary(conn, ctx.device_id)
@@ -548,6 +587,7 @@ def render_health_dashboard_report(
             steps=steps,
             heart_rate=heart_rate,
             sleep=sleep,
+            historical_metrics=historical_metrics,
             realtime=realtime,
             sessions=sessions,
             battery=battery,
@@ -657,18 +697,29 @@ def render_health_dashboard_report(
         lines.append("## What Is Still Missing")
         lines.append("")
         lines.append("- No raw accelerometer history is stored. Current activity data is already aggregated into 15-minute bins.")
-        lines.append("- No decoded sleep sessions or sleep stages exist yet.")
-        lines.append("- No historical SpO2, HRV, stress, blood-pressure, or one-key observations are synced into first-class tables.")
+        if sleep["total_count"] == 0:
+            lines.append("- No decoded sleep sessions or sleep stages exist yet.")
+        if (
+            historical_metrics["blood_oxygen_total"] == 0
+            and historical_metrics["hrv_total"] == 0
+            and historical_metrics["pressure_total"] == 0
+        ):
+            lines.append("- No historical SpO2, HRV, or stress-like observations are synced into first-class tables.")
+        else:
+            lines.append(
+                f"- Historical samples are now stored for SpO2=`{historical_metrics['blood_oxygen_total']}`, "
+                f"HRV=`{historical_metrics['hrv_total']}`, pressure/stress-like=`{historical_metrics['pressure_total']}`."
+            )
         lines.append("- No rule layer exists yet for daily goals, night-time windows, baseline HRV, stress labels, or blood-pressure presentation.")
         lines.append("- Timestamps are still reported against UTC storage days; local-day normalization for dashboard display is not implemented.")
         lines.append("")
         lines.append("## Suggested Next Rules To Implement")
         lines.append("")
         lines.append("1. Normalize report dates into the user timezone before building daily cards.")
-        lines.append("2. Add sleep decoding or a first-pass sleep inference model from activity + heart-rate trends.")
-        lines.append("3. Capture and persist historical or replayable payloads for SpO2, HRV, pressure/stress, and blood pressure if the protocol exposes them.")
+        lines.append("2. Normalize UTC storage days into the user timezone before building daily cards.")
+        lines.append("3. Validate sleep stage semantics, SpO2 sample timing, and pressure/stress naming against more captures.")
         lines.append("4. Validate the calories field against the vendor app before exposing it as kcal.")
-        lines.append("5. Decide whether inferred activity sessions are good enough for the first sport card, or whether explicit sport-session decoding is required.")
+        lines.append("5. Investigate historical blood-pressure extraction and decide whether inferred activity sessions are sufficient for the first sport card.")
         lines.append("")
         return "\n".join(lines)
     finally:
