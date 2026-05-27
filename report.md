@@ -1,6 +1,6 @@
 # H59 Health Dashboard Data Audit
 
-- Generated at: 2026-05-27 21:05 UTC
+- Generated at: 2026-05-27 21:28 UTC
 - Database: `/Users/remi.turpaud/Code/h59/data/h59.sqlite`
 - Device: `H59_7407` (`86B9D8D4-6CB2-E24D-815D-A141786F427B`)
 - Device ID: `1`
@@ -21,7 +21,7 @@
 
 | Requirement | Data in DB | Current extraction/rule coverage | Remaining gap |
 |---|---|---|---|
-| Steps | Available | Partial: Daily totals and hourly buckets from 15-minute activity bins | No raw accelerometer history, no goal logic, calories unit still unvalidated |
+| Steps | Available | Partial: Daily totals and hourly buckets from stored activity summaries | No raw accelerometer history, no goal logic, calories unit still unvalidated |
 | Heart rate | Available | Available: Latest/min/max/avg from historical 5-minute samples | No night-time segmentation or confidence scoring yet |
 | Sleep | Available | Available: Sleep sessions and staged periods available | Stage semantics still provisional for some values; local-day presentation rules are still missing |
 | Blood oxygen / SpO2 | Available | Partial: Historical min/max samples available (46 for selected day) | Sample timing and header semantics are still provisional; no night-time minimum rule yet |
@@ -37,7 +37,7 @@
 - Activity bins on selected day: `12`
 - First activity bin: `2026-05-27 07:00 UTC`
 - Last activity bin: `2026-05-27 20:00 UTC`
-- Notes: steps and distance are usable; the calories-like field still needs unit validation against the app.
+- Notes: current stored activity summaries are hourly in this dataset; steps and distance are usable, and the calories-like field still needs unit validation against the app.
 
 | Hour bucket | Steps |
 |---|---|
@@ -66,10 +66,91 @@
 - Latest session: `2026-05-26 23:40 UTC` to `2026-05-27 08:49 UTC`
 - Latest duration: `09 h 09 min`
 
-## Blood Oxygen, HRV, Stress, Blood Pressure, One Key
+## Health Metrics
+
+### Blood Oxygen / SpO2
+- Historical samples: `46` total, `46` on selected day
+- Latest historical sample: `min=97%`, `max=97%` at `2026-05-27 22:30 UTC`
+
+### HRV
+- Historical samples: `72` total, `21` on selected day
+- Latest historical sample: `42` at `2026-05-27 11:00 UTC`
+
+### Stress / Pressure-like
+- Historical samples: `145` total, `42` on selected day
+- Latest historical sample: `48` at `2026-05-27 22:30 UTC`
+
+### Blood Pressure
+- Not available in the current database.
+
+### One Key Measurement
+- Not available in the current database.
 
 - No realtime metric samples are stored in this database.
 - Device-advertised capability flags: `support_blood_pressure, support_hrv, support_menstruation, support_one_key_check, support_pressure, support_spo2, support_wechat`
+
+## Data Quality and Completeness
+
+- Window basis: last 24 hours for each fixed-interval series, ending at that series' latest stored measurement
+### Heart rate
+- Latest measurement: `2026-05-27 20:45 UTC` (interval `5 min`, samples in window `214`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-26 20:50 UTC` to `2026-05-26 20:55 UTC` (`2` missing intervals)
+  - `2026-05-26 21:10 UTC` to `2026-05-26 21:25 UTC` (`4` missing intervals)
+  - `2026-05-26 21:40 UTC` to `2026-05-26 22:45 UTC` (`14` missing intervals)
+  - `2026-05-26 23:00 UTC` to `2026-05-26 23:05 UTC` (`2` missing intervals)
+  - `2026-05-26 23:30 UTC` to `2026-05-26 23:35 UTC` (`2` missing intervals)
+  - `2026-05-27 10:35 UTC` to `2026-05-27 10:55 UTC` (`5` missing intervals)
+  - `2026-05-27 11:45 UTC` to `2026-05-27 11:55 UTC` (`3` missing intervals)
+  - `2026-05-27 13:20 UTC` to `2026-05-27 13:40 UTC` (`5` missing intervals)
+  - `2026-05-27 14:00 UTC` to `2026-05-27 14:15 UTC` (`4` missing intervals)
+  - `2026-05-27 14:25 UTC` to `2026-05-27 15:15 UTC` (`11` missing intervals)
+  - `2026-05-27 18:30 UTC` to `2026-05-27 19:05 UTC` (`8` missing intervals)
+  - `2026-05-27 19:15 UTC` to `2026-05-27 20:25 UTC` (`15` missing intervals)
+### Activity steps
+- Latest measurement: `2026-05-27 20:00 UTC` (interval `60 min`, samples in window `13`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-26 21:00 UTC` to `2026-05-27 06:00 UTC` (`10` missing intervals)
+  - `2026-05-27 13:00 UTC` to `2026-05-27 14:00 UTC` (`2` missing intervals)
+### Activity distance
+- Latest measurement: `2026-05-27 20:00 UTC` (interval `60 min`, samples in window `13`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-26 21:00 UTC` to `2026-05-27 06:00 UTC` (`10` missing intervals)
+  - `2026-05-27 13:00 UTC` to `2026-05-27 14:00 UTC` (`2` missing intervals)
+### Activity calories-like
+- Latest measurement: `2026-05-27 20:00 UTC` (interval `60 min`, samples in window `13`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-26 21:00 UTC` to `2026-05-27 06:00 UTC` (`10` missing intervals)
+  - `2026-05-27 13:00 UTC` to `2026-05-27 14:00 UTC` (`2` missing intervals)
+### Blood oxygen min
+- Latest measurement: `2026-05-27 22:30 UTC` (interval `30 min`, samples in window `46`)
+- No gaps detected in the last 24 hours.
+### Blood oxygen max
+- Latest measurement: `2026-05-27 22:30 UTC` (interval `30 min`, samples in window `46`)
+- No gaps detected in the last 24 hours.
+### Stress / pressure-like
+- Latest measurement: `2026-05-27 22:30 UTC` (interval `30 min`, samples in window `42`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-27 13:30 UTC` to `2026-05-27 15:00 UTC` (`4` missing intervals)
+### HRV
+- Latest measurement: `2026-05-27 11:00 UTC` (interval `30 min`, samples in window `21`)
+- Gaps detected in the last 24 hours:
+  - `2026-05-27 07:00 UTC` to `2026-05-27 07:30 UTC` (`2` missing intervals)
+
+## Statistical Analysis
+
+Window basis: last 24 hours for each fixed-interval series, ending at that series' latest stored measurement.
+
+| Measurement | Samples | Median | P5 | P95 | Min | Max |
+|---|---|---|---|---|---|---|
+| Heart rate | 214 | 68 | 56.6 | 88 | 48 | 112 |
+| Activity steps | 13 | 204 | 30 | 701.4 | 24 | 1023 |
+| Activity distance | 13 | 125 | 17.2 | 460.4 | 13 | 716 |
+| Activity calories-like | 13 | 5390 | 762 | 19880.0 | 570 | 30980 |
+| Blood oxygen min | 46 | 98.5 | 96 | 99 | 1 | 99 |
+| Blood oxygen max | 46 | 99 | 96.2 | 99 | 96 | 99 |
+| Stress / pressure-like | 42 | 40 | 30 | 61 | 25 | 65 |
+| HRV | 21 | 43 | 34 | 49 | 33 | 50 |
 
 ## Sport / Activity Sessions
 
@@ -87,7 +168,7 @@
 | 2026-05-27 18:00 UTC | 2026-05-27 18:15 UTC | 15 min | 187 | 118 | 5080 | 87.3 |
 | 2026-05-27 19:00 UTC | 2026-05-27 19:15 UTC | 15 min | 1023 | 716 | 30980 | 77.0 |
 | 2026-05-27 20:00 UTC | 2026-05-27 20:15 UTC | 15 min | 342 | 209 | 9000 | n/a |
-- These sessions are inferred from contiguous 15-minute activity bins, not explicit device sport records.
+- These sessions are inferred from contiguous stored activity summaries, not explicit device sport records.
 
 ## Device and Sync Status
 
@@ -97,17 +178,3 @@
 - Last successful sync: `2026-05-27 20:53 UTC`
 - Raw packets captured: `1112` from `2026-05-27 11:37 UTC` to `2026-05-27 20:53 UTC`
 
-## What Is Still Missing
-
-- No raw accelerometer history is stored. Current activity data is already aggregated into 15-minute bins.
-- Historical samples are now stored for SpO2=`46`, HRV=`72`, pressure/stress-like=`145`.
-- No rule layer exists yet for daily goals, night-time windows, baseline HRV, stress labels, or blood-pressure presentation.
-- Timestamps are still reported against UTC storage days; local-day normalization for dashboard display is not implemented.
-
-## Suggested Next Rules To Implement
-
-1. Normalize report dates into the user timezone before building daily cards.
-2. Normalize UTC storage days into the user timezone before building daily cards.
-3. Validate sleep stage semantics, SpO2 sample timing, and pressure/stress naming against more captures.
-4. Validate the calories field against the vendor app before exposing it as kcal.
-5. Investigate historical blood-pressure extraction and decide whether inferred activity sessions are sufficient for the first sport card.

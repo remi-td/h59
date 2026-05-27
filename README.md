@@ -52,7 +52,7 @@ Discover devices, run an initial sync:
 h59 device discover
 h59 device nickname set 1 wristband # You can set a nickname (eg. "wristband") to your device (eg. device_id=1)
 h59 sync -i                         # Incremental sync: if database is empty gathers all available history
-h59 vibrate 1                       # You can use the nickname (eg. "wristband"), device_id or address
+h59 report 1 --output report.md     # Generate a report to inspect the collected data
 ```
 
 Start the daemon service to sync every 15 minutes:
@@ -61,11 +61,11 @@ h59 sync -di --period 15m
 h59 daemon status
 ```
 
-List discovered devices:
+You can list, inspect and identify (vibrate) discovered devices using their nickname (eg. "wristband"), device_id or address
 ```bash
 h59 device list
-h59 device info 1               # You can use the nickname (eg. "wristband"), device_id or address
-h59 report 1 --output report.md
+h59 device info 1               
+h59 vibrate 1 
 ```
 
 ## Default Database Location

@@ -92,7 +92,7 @@ def test_render_dashboard_report_surfaces_available_and_missing_metrics(tmp_path
     markdown = render_health_dashboard_report(tmp_path / "h59.sqlite", report_date="2026-05-26")
 
     assert "# H59 Health Dashboard Data Audit" in markdown
-    assert "| Steps | Available | Partial: Daily totals and hourly buckets from 15-minute activity bins |" in markdown
+    assert "| Steps | Available | Partial: Daily totals and hourly buckets from stored activity summaries |" in markdown
     assert "| Heart rate | Available | Available: Latest/min/max/avg from historical 5-minute samples |" in markdown
     assert "| Sleep | Missing | Missing: No decoded sleep sessions in current database |" in markdown
     assert "### Blood Oxygen / SpO2" in markdown
@@ -101,7 +101,13 @@ def test_render_dashboard_report_surfaces_available_and_missing_metrics(tmp_path
     assert "### Stress / Pressure-like" in markdown
     assert "### Blood Pressure" in markdown
     assert "- Not available in the current database." in markdown
-    assert "These sessions are inferred from contiguous 15-minute activity bins" in markdown
+    assert "## Data Quality and Completeness" in markdown
+    assert "### Heart rate" in markdown
+    assert "- No gaps detected in the last 24 hours." in markdown
+    assert "## Statistical Analysis" in markdown
+    assert "| Measurement | Samples | Median | P5 | P95 | Min | Max |" in markdown
+    assert "| Heart rate | 3 | 63 | 62.1 | 63.9 | 62 | 64 |" in markdown
+    assert "These sessions are inferred from contiguous stored activity summaries" in markdown
 
     db.close()
 
@@ -121,5 +127,39 @@ def test_render_dashboard_report_flags_incomplete_syncs(tmp_path):
     markdown = render_health_dashboard_report(tmp_path / "h59.sqlite", report_date="2026-05-26")
 
     assert "Warning: at least one sync session in the database has no `finished_at`" in markdown
+
+    db.close()
+
+
+def test_render_dashboard_report_lists_gap_periods_for_fixed_interval_series(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-26T15:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-26T15:00:00+00:00", source="test")
+    db.record_heart_rate_day(
+        device_id,
+        sync_id,
+        day=HeartRateDay(
+            heart_rates=[60, 0, 62, 0],
+            timestamp=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+            size=1,
+            index=3,
+            range=5,
+        ),
+        raw_packet_hex="15...",
+    )
+    db.finish_sync(sync_id, finished_at="2026-05-26T15:00:03+00:00")
+
+    markdown = render_health_dashboard_report(tmp_path / "h59.sqlite", report_date="2026-05-26")
+
+    assert "### Heart rate" in markdown
+    assert "- Gaps detected in the last 24 hours:" in markdown
+    assert "`2026-05-26 00:05 UTC` to `2026-05-26 00:05 UTC` (`1` missing interval)" in markdown
 
     db.close()

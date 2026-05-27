@@ -33,6 +33,74 @@ class ReportContext:
     report_date: str
 
 
+SERIES_DEFINITIONS = [
+    {
+        "key": "heart_rate",
+        "label": "Heart rate",
+        "table": "heart_rates",
+        "timestamp_column": "timestamp",
+        "value_column": "reading",
+        "interval_minutes": 5,
+    },
+    {
+        "key": "activity_steps",
+        "label": "Activity steps",
+        "table": "sport_details",
+        "timestamp_column": "timestamp",
+        "value_column": "steps",
+        "interval_minutes": 60,
+    },
+    {
+        "key": "activity_distance",
+        "label": "Activity distance",
+        "table": "sport_details",
+        "timestamp_column": "timestamp",
+        "value_column": "distance",
+        "interval_minutes": 60,
+    },
+    {
+        "key": "activity_calories",
+        "label": "Activity calories-like",
+        "table": "sport_details",
+        "timestamp_column": "timestamp",
+        "value_column": "calories",
+        "interval_minutes": 60,
+    },
+    {
+        "key": "blood_oxygen_min",
+        "label": "Blood oxygen min",
+        "table": "blood_oxygen_samples",
+        "timestamp_column": "timestamp",
+        "value_column": "min_percent",
+        "interval_minutes": 30,
+    },
+    {
+        "key": "blood_oxygen_max",
+        "label": "Blood oxygen max",
+        "table": "blood_oxygen_samples",
+        "timestamp_column": "timestamp",
+        "value_column": "max_percent",
+        "interval_minutes": 30,
+    },
+    {
+        "key": "pressure",
+        "label": "Stress / pressure-like",
+        "table": "pressure_samples",
+        "timestamp_column": "timestamp",
+        "value_column": "value",
+        "interval_minutes": 30,
+    },
+    {
+        "key": "hrv",
+        "label": "HRV",
+        "table": "hrv_samples",
+        "timestamp_column": "timestamp",
+        "value_column": "value",
+        "interval_minutes": 30,
+    },
+]
+
+
 def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -53,6 +121,16 @@ def _fmt_minutes(value: int | None) -> str:
         return "n/a"
     hours, minutes = divmod(value, 60)
     return f"{hours:02d} h {minutes:02d} min"
+
+
+def _fmt_value(value: float | int | None) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, float):
+        return f"{value:.1f}"
+    return str(value)
 
 
 def _device_row(conn: sqlite3.Connection, device_id: int | None = None) -> sqlite3.Row:
@@ -348,6 +426,107 @@ def _latest_realtime_by_metric(conn: sqlite3.Connection, device_id: int) -> dict
     return output
 
 
+def _series_rows(conn: sqlite3.Connection, device_id: int, definition: dict[str, Any]) -> list[tuple[datetime, float]]:
+    rows = conn.execute(
+        f"""
+        SELECT {definition['timestamp_column']} AS ts, {definition['value_column']} AS value
+        FROM {definition['table']}
+        WHERE device_id=?
+        ORDER BY {definition['timestamp_column']} ASC
+        """,
+        (device_id,),
+    ).fetchall()
+    out: list[tuple[datetime, float]] = []
+    for row in rows:
+        ts = _parse_iso(row["ts"])
+        value = row["value"]
+        if ts is None or value is None:
+            continue
+        out.append((ts, float(value)))
+    return out
+
+
+def _percentile(sorted_values: list[float], fraction: float) -> float | None:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = (len(sorted_values) - 1) * fraction
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    weight = position - lower_index
+    lower = sorted_values[lower_index]
+    upper = sorted_values[upper_index]
+    return lower + (upper - lower) * weight
+
+
+def _series_statistics(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"count": 0, "median": None, "p5": None, "p95": None, "min": None, "max": None}
+    sorted_values = sorted(values)
+    midpoint = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        median = sorted_values[midpoint]
+    else:
+        median = (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2
+    return {
+        "count": len(sorted_values),
+        "median": median,
+        "p5": _percentile(sorted_values, 0.05),
+        "p95": _percentile(sorted_values, 0.95),
+        "min": sorted_values[0],
+        "max": sorted_values[-1],
+    }
+
+
+def _fixed_interval_analysis(conn: sqlite3.Connection, device_id: int) -> list[dict[str, Any]]:
+    analyses: list[dict[str, Any]] = []
+    for definition in SERIES_DEFINITIONS:
+        rows = _series_rows(conn, device_id, definition)
+        if not rows:
+            analyses.append(
+                {
+                    "label": definition["label"],
+                    "interval_minutes": definition["interval_minutes"],
+                    "latest_timestamp": None,
+                    "window_start": None,
+                    "sample_count": 0,
+                    "gaps": [],
+                    "stats": _series_statistics([]),
+                }
+            )
+            continue
+
+        latest_timestamp = rows[-1][0]
+        window_start = latest_timestamp - timedelta(hours=24)
+        window_rows = [(ts, value) for ts, value in rows if window_start <= ts <= latest_timestamp]
+        timestamps = [ts for ts, _value in window_rows]
+        interval = timedelta(minutes=definition["interval_minutes"])
+        gaps: list[tuple[datetime, datetime, int]] = []
+
+        if timestamps:
+            for previous_ts, current_ts in zip(timestamps, timestamps[1:]):
+                delta = current_ts - previous_ts
+                if delta > interval:
+                    gap_start = previous_ts + interval
+                    gap_end = current_ts - interval
+                    gap_slots = int(delta.total_seconds() // interval.total_seconds()) - 1
+                    gaps.append((gap_start, gap_end, gap_slots))
+
+        analyses.append(
+            {
+                "label": definition["label"],
+                "interval_minutes": definition["interval_minutes"],
+                "latest_timestamp": latest_timestamp,
+                "window_start": window_start,
+                "sample_count": len(window_rows),
+                "gaps": gaps,
+                "stats": _series_statistics([value for _ts, value in window_rows]),
+            }
+        )
+    return analyses
+
+
 def _sync_summary(conn: sqlite3.Connection, device_id: int) -> dict[str, Any]:
     row = conn.execute(
         """
@@ -488,7 +667,7 @@ def _coverage_rows(
         (
             "Steps",
             _status_label(steps["block_count"] > 0),
-            "Daily totals and hourly buckets from 15-minute activity bins",
+            "Daily totals and hourly buckets from stored activity summaries",
             "Partial",
             "No raw accelerometer history, no goal logic, calories unit still unvalidated",
         )
@@ -643,6 +822,7 @@ def render_health_dashboard_report(
         battery = _battery_summary(conn, ctx.device_id)
         sessions = _infer_activity_sessions(conn, ctx.device_id, ctx.report_date)
         raw_packets = _raw_packet_summary(conn, ctx.device_id)
+        fixed_interval_analyses = _fixed_interval_analysis(conn, ctx.device_id)
         coverage = _coverage_rows(
             capabilities=capabilities,
             steps=steps,
@@ -687,7 +867,7 @@ def render_health_dashboard_report(
         lines.append(f"- Activity bins on selected day: `{steps['block_count']}`")
         lines.append(f"- First activity bin: `{_fmt_ts(steps['first_block'])}`")
         lines.append(f"- Last activity bin: `{_fmt_ts(steps['last_block'])}`")
-        lines.append("- Notes: steps and distance are usable; the calories-like field still needs unit validation against the app.")
+        lines.append("- Notes: current stored activity summaries are hourly in this dataset; steps and distance are usable, and the calories-like field still needs unit validation against the app.")
         if steps["hourly_steps"]:
             lines.append("")
             lines.append("| Hour bucket | Steps |")
@@ -789,6 +969,42 @@ def render_health_dashboard_report(
         else:
             lines.append("- No capability snapshot is stored in this database.")
         lines.append("")
+        lines.append("## Data Quality and Completeness")
+        lines.append("")
+        lines.append("- Window basis: last 24 hours for each fixed-interval series, ending at that series' latest stored measurement")
+        for analysis in fixed_interval_analyses:
+            lines.append(f"### {analysis['label']}")
+            if analysis["latest_timestamp"] is None:
+                lines.append("- Not available in the current database.")
+                lines.append("")
+                continue
+            lines.append(
+                f"- Latest measurement: `{_fmt_ts(analysis['latest_timestamp'].isoformat())}` "
+                f"(interval `{analysis['interval_minutes']} min`, samples in window `{analysis['sample_count']}`)"
+            )
+            if analysis["gaps"]:
+                lines.append("- Gaps detected in the last 24 hours:")
+                for gap_start, gap_end, gap_slots in analysis["gaps"]:
+                    lines.append(
+                        f"  - `{_fmt_ts(gap_start.isoformat())}` to `{_fmt_ts(gap_end.isoformat())}` "
+                        f"(`{gap_slots}` missing interval{'s' if gap_slots != 1 else ''})"
+                    )
+            else:
+                lines.append("- No gaps detected in the last 24 hours.")
+        lines.append("")
+        lines.append("## Statistical Analysis")
+        lines.append("")
+        lines.append("Window basis: last 24 hours for each fixed-interval series, ending at that series' latest stored measurement.")
+        lines.append("")
+        lines.append("| Measurement | Samples | Median | P5 | P95 | Min | Max |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for analysis in fixed_interval_analyses:
+            stats = analysis["stats"]
+            lines.append(
+                f"| {analysis['label']} | {stats['count']} | {_fmt_value(stats['median'])} | {_fmt_value(stats['p5'])} | "
+                f"{_fmt_value(stats['p95'])} | {_fmt_value(stats['min'])} | {_fmt_value(stats['max'])} |"
+            )
+        lines.append("")
         lines.append("## Sport / Activity Sessions")
         lines.append("")
         if sessions:
@@ -801,7 +1017,7 @@ def render_health_dashboard_report(
                     f"| {_fmt_ts(session['start'].isoformat())} | {_fmt_ts(session['end'].isoformat())} | {duration_minutes} min | "
                     f"{session['steps']} | {session['distance']} | {session['calories']} | {avg_hr} |"
                 )
-            lines.append("- These sessions are inferred from contiguous 15-minute activity bins, not explicit device sport records.")
+            lines.append("- These sessions are inferred from contiguous stored activity summaries, not explicit device sport records.")
         else:
             lines.append("- No inferred activity sessions were found for the selected day.")
         lines.append("")
