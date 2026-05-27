@@ -449,12 +449,16 @@ class HrvHistoryParser:
         return None
 
 
-def read_pressure_history_packet() -> bytearray:
-    return make_packet(CMD_PRESSURE_HISTORY, bytearray([0]))
+def read_pressure_history_packet(selector: int = 0) -> bytearray:
+    if not 0 <= selector <= 255:
+        raise ValueError("selector must be between 0 and 255")
+    return make_packet(CMD_PRESSURE_HISTORY, bytearray([selector]))
 
 
-def read_hrv_history_packet() -> bytearray:
-    return make_packet(CMD_HRV_HISTORY, bytearray([0]))
+def read_hrv_history_packet(selector: int = 0) -> bytearray:
+    if not 0 <= selector <= 255:
+        raise ValueError("selector must be between 0 and 255")
+    return make_packet(CMD_HRV_HISTORY, bytearray([selector]))
 
 
 class Action(IntEnum):
@@ -540,6 +544,17 @@ class SleepSession:
             start_timestamp -= timedelta(days=1)
         return start_timestamp, end_timestamp
 
+    def has_valid_bounds(self) -> bool:
+        if self.bytes_used < 4:
+            return False
+        if not self.periods:
+            return False
+        if not 0 <= self.sleep_start_minutes <= 48 * 60:
+            return False
+        if not 0 <= self.sleep_end_minutes <= 48 * 60:
+            return False
+        return True
+
 
 def parse_bigdata_sleep(payload: bytes) -> list[SleepSession]:
     if len(payload) < 7 or payload[0] != BIGDATA_MAGIC or payload[1] != BIGDATA_SLEEP_ID:
@@ -564,13 +579,16 @@ def parse_bigdata_sleep(payload: bytes) -> list[SleepSession]:
             break
         days_ago = body[offset]
         bytes_used = body[offset + 1]
+        if bytes_used < 4:
+            break
         sleep_start = struct.unpack_from("<h", body, offset + 2)[0]
         sleep_end = struct.unpack_from("<h", body, offset + 4)[0]
         offset += 6
 
         periods: list[SleepPeriod] = []
-        consumed = 6
-        while consumed + 2 <= bytes_used and offset + 1 < len(body):
+        period_bytes = max(0, bytes_used - 4)
+        consumed = 0
+        while consumed + 2 <= period_bytes and offset + 1 < len(body):
             stage_code = body[offset]
             duration = body[offset + 1]
             periods.append(SleepPeriod(stage=stage_names.get(stage_code, f"unknown-{stage_code}"), minutes=duration))
@@ -599,11 +617,12 @@ class BloodOxygenSample:
 class BloodOxygenHistory:
     unknown_flag: int
     samples: list[BloodOxygenSample]
+    slots_per_day: int = 48
 
     def samples_with_times(self, target: datetime, *, interval_minutes: int = 30) -> list[tuple[BloodOxygenSample, datetime]]:
         start = date_utils.start_of_day(target)
         out = []
-        for index, sample in enumerate(self.samples):
+        for index, sample in enumerate(self.samples[: self.slots_per_day]):
             out.append((sample, start + timedelta(minutes=index * interval_minutes)))
         return out
 

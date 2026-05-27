@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS devices (
     device_id INTEGER PRIMARY KEY,
     address TEXT NOT NULL UNIQUE,
     name TEXT,
+    nickname TEXT,
     advertisement_json TEXT,
     hw_version TEXT,
     fw_version TEXT,
@@ -244,6 +245,10 @@ CREATE TABLE IF NOT EXISTS hrv_samples (
     FOREIGN KEY(device_id) REFERENCES devices(device_id),
     FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_nickname_unique
+ON devices(nickname)
+WHERE nickname IS NOT NULL;
 """
 
 
@@ -266,6 +271,8 @@ class H59Database:
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._apply_migrations()
+        self._cleanup_legacy_rows()
         self._write_metadata_defaults()
         self.connection.commit()
 
@@ -283,6 +290,38 @@ class H59Database:
                 ("timestamp_timezone", "UTC"),
                 ("timestamp_storage", "ISO-8601 text with explicit +00:00 offset"),
             ],
+        )
+
+    def _apply_migrations(self) -> None:
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(devices)").fetchall()}
+        if "nickname" not in columns:
+            self.connection.execute("ALTER TABLE devices ADD COLUMN nickname TEXT")
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_nickname_unique
+            ON devices(nickname)
+            WHERE nickname IS NOT NULL
+            """
+        )
+
+    def _cleanup_legacy_rows(self) -> None:
+        # Older builds could persist malformed sleep rows without resolved
+        # timestamps. Raw packets remain available, so remove only the broken
+        # first-class decoded rows.
+        self.connection.execute(
+            """
+            DELETE FROM sleep_stage_samples
+            WHERE start_timestamp IS NULL OR end_timestamp IS NULL
+            """
+        )
+        self.connection.execute(
+            """
+            DELETE FROM sleep_sessions
+            WHERE start_timestamp IS NULL
+               OR end_timestamp IS NULL
+               OR total_minutes IS NULL
+               OR total_minutes <= 0
+            """
         )
 
     def upsert_device(
@@ -312,6 +351,58 @@ class H59Database:
         device_id = self.connection.execute("SELECT device_id FROM devices WHERE address=?", (address,)).fetchone()[0]
         self.connection.commit()
         return int(device_id)
+
+    def get_device_by_selector(self, selector: str) -> sqlite3.Row | None:
+        if selector.isdigit():
+            row = self.connection.execute("SELECT * FROM devices WHERE device_id=?", (int(selector),)).fetchone()
+            if row is not None:
+                return row
+        row = self.connection.execute("SELECT * FROM devices WHERE address=?", (selector,)).fetchone()
+        if row is not None:
+            return row
+        row = self.connection.execute("SELECT * FROM devices WHERE nickname=?", (selector,)).fetchone()
+        if row is not None:
+            return row
+        return self.connection.execute("SELECT * FROM devices WHERE name=?", (selector,)).fetchone()
+
+    def list_devices(self) -> list[sqlite3.Row]:
+        rows = self.connection.execute(
+            """
+            SELECT device_id, address, name, nickname, hw_version, fw_version, last_seen_at
+            FROM devices
+            ORDER BY
+                CASE WHEN nickname IS NULL THEN 1 ELSE 0 END,
+                nickname ASC,
+                CASE WHEN last_seen_at IS NULL THEN 1 ELSE 0 END,
+                last_seen_at DESC,
+                device_id ASC
+            """
+        ).fetchall()
+        return list(rows)
+
+    def set_device_nickname(self, selector: str, nickname: str | None) -> sqlite3.Row:
+        row = self.get_device_by_selector(selector)
+        if row is None:
+            raise ValueError(f"unknown device selector: {selector}")
+        normalized = nickname.strip() if nickname is not None else None
+        if normalized == "":
+            normalized = None
+        self.connection.execute(
+            "UPDATE devices SET nickname=? WHERE device_id=?",
+            (normalized, int(row["device_id"])),
+        )
+        self.connection.commit()
+        updated = self.connection.execute("SELECT * FROM devices WHERE device_id=?", (int(row["device_id"]),)).fetchone()
+        if updated is None:
+            raise ValueError(f"device disappeared during nickname update: {selector}")
+        return updated
+
+    def has_gatt_snapshot(self, device_id: int) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM gatt_characteristics WHERE device_id=? LIMIT 1",
+            (device_id,),
+        ).fetchone()
+        return row is not None
 
     def create_sync(self, device_id: int, *, started_at: str | datetime, source: str, comment: str | None = None) -> int:
         cur = self.connection.execute(
@@ -540,71 +631,90 @@ class H59Database:
     ) -> None:
         reference = reference.astimezone(UTC)
         for session in sessions:
+            if not session.has_valid_bounds():
+                continue
             raw_json = to_json(session)
             total_minutes = sum(period.minutes for period in session.periods)
+            if total_minutes <= 0:
+                continue
             is_provisional = any(period.stage.startswith("unknown-") for period in session.periods)
-            start_timestamp = None
-            end_timestamp = None
-
-            if 0 <= session.sleep_start_minutes <= 48 * 60 and 0 <= session.sleep_end_minutes <= 48 * 60:
-                start_dt, end_dt = session.resolved_bounds(reference)
-                start_timestamp = utc_text(start_dt)
-                end_timestamp = utc_text(end_dt)
-            else:
-                is_provisional = True
-
-            self.connection.execute(
-                """
-                INSERT INTO sleep_sessions(
-                    device_id,
-                    sync_id,
-                    start_timestamp,
-                    end_timestamp,
-                    total_minutes,
-                    state,
-                    score,
-                    is_provisional,
-                    source_command,
-                    raw_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(device_id, source_command, raw_json) DO UPDATE SET
-                    sync_id=excluded.sync_id,
-                    start_timestamp=COALESCE(excluded.start_timestamp, sleep_sessions.start_timestamp),
-                    end_timestamp=COALESCE(excluded.end_timestamp, sleep_sessions.end_timestamp),
-                    total_minutes=excluded.total_minutes,
-                    state=excluded.state,
-                    score=excluded.score,
-                    is_provisional=excluded.is_provisional
-                """,
-                (
-                    device_id,
-                    sync_id,
-                    start_timestamp,
-                    end_timestamp,
-                    total_minutes,
-                    "decoded",
-                    None,
-                    int(is_provisional),
-                    source_command,
-                    raw_json,
-                ),
-            )
-            sleep_session_id = self.connection.execute(
+            start_dt, end_dt = session.resolved_bounds(reference)
+            start_timestamp = utc_text(start_dt)
+            end_timestamp = utc_text(end_dt)
+            existing_row = self.connection.execute(
                 """
                 SELECT sleep_session_id
                 FROM sleep_sessions
-                WHERE device_id=? AND source_command=? AND raw_json=?
+                WHERE device_id=? AND source_command=? AND start_timestamp=? AND end_timestamp=?
+                ORDER BY sleep_session_id DESC
+                LIMIT 1
                 """,
-                (device_id, source_command, raw_json),
-            ).fetchone()[0]
+                (device_id, source_command, start_timestamp, end_timestamp),
+            ).fetchone()
+            if existing_row is not None:
+                sleep_session_id = int(existing_row[0])
+                self.connection.execute(
+                    """
+                    UPDATE sleep_sessions
+                    SET
+                        sync_id=?,
+                        total_minutes=?,
+                        state=?,
+                        score=?,
+                        is_provisional=?,
+                        raw_json=?
+                    WHERE sleep_session_id=?
+                    """,
+                    (
+                        sync_id,
+                        total_minutes,
+                        "decoded",
+                        None,
+                        int(is_provisional),
+                        raw_json,
+                        sleep_session_id,
+                    ),
+                )
+                self.connection.execute(
+                    "DELETE FROM sleep_stage_samples WHERE sleep_session_id=?",
+                    (sleep_session_id,),
+                )
+            else:
+                cur = self.connection.execute(
+                    """
+                    INSERT INTO sleep_sessions(
+                        device_id,
+                        sync_id,
+                        start_timestamp,
+                        end_timestamp,
+                        total_minutes,
+                        state,
+                        score,
+                        is_provisional,
+                        source_command,
+                        raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        device_id,
+                        sync_id,
+                        start_timestamp,
+                        end_timestamp,
+                        total_minutes,
+                        "decoded",
+                        None,
+                        int(is_provisional),
+                        source_command,
+                        raw_json,
+                    ),
+                )
+                sleep_session_id = int(cur.lastrowid)
 
-            stage_start = datetime.fromisoformat(start_timestamp) if start_timestamp else None
+            stage_start = datetime.fromisoformat(start_timestamp)
             for index, period in enumerate(session.periods):
                 period_start = stage_start
-                period_end = None
-                if stage_start is not None:
-                    period_end = stage_start + timedelta(minutes=period.minutes)
+                period_end = stage_start + timedelta(minutes=period.minutes)
                 period_json = to_json(period)
                 self.connection.execute(
                     """
@@ -636,15 +746,14 @@ class H59Database:
                         sync_id,
                         index,
                         period.stage,
-                        utc_text(period_start) if period_start is not None else None,
-                        utc_text(period_end) if period_end is not None else None,
+                        utc_text(period_start),
+                        utc_text(period_end),
                         period.minutes,
                         int(is_provisional or period.stage.startswith("unknown-")),
                         period_json,
                     ),
                 )
-                if stage_start is not None and period_end is not None:
-                    stage_start = period_end
+                stage_start = period_end
         self.connection.commit()
 
     def record_blood_oxygen_history(

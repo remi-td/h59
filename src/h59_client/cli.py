@@ -10,17 +10,55 @@ import logging
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from typing import Any
+
+from bleak.exc import BleakError
+
+try:
+    from bleak.exc import BleakBluetoothNotAvailableError
+except ImportError:  # pragma: no cover - older bleak versions do not expose this class
+    BleakBluetoothNotAvailableError = None  # type: ignore[assignment]
 
 from h59_client import __version__
 from h59_client.actions import fetch_capabilities_h59, fetch_device_info_h59, reboot_h59, vibrate_h59
+from h59_client.devices import discover_and_store_targets
+from h59_client.storage import H59Database
 from h59_client.sync import sync_h59
 
 
 logger = logging.getLogger(__name__)
+
+
+def format_operational_error(exc: Exception) -> str | None:
+    message = str(exc)
+    if message == "No H59-like device found during scan":
+        return (
+            "No H59 device was discovered.\n"
+            "Check that the device is nearby, charged, and advertising over Bluetooth.\n"
+            "If it is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
+        )
+    if BleakBluetoothNotAvailableError is not None and isinstance(exc, BleakBluetoothNotAvailableError):
+        return (
+            "Bluetooth is not available for H59 discovery right now.\n"
+            "Check that Bluetooth is enabled and that this process has Bluetooth permission.\n"
+            "If the bracelet is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
+        )
+    if isinstance(exc, BleakError) and (
+        "Bluetooth is unsupported" in message
+        or ("Bluetooth" in message and "not available" in message.lower())
+        or "unsupported" in message.lower()
+    ):
+        return (
+            "Bluetooth is not available for H59 discovery right now.\n"
+            "Check that Bluetooth is enabled and that this process has Bluetooth permission.\n"
+            "If the bracelet is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
+        )
+    return None
 
 
 def parse_duration(value: str) -> int:
@@ -63,6 +101,11 @@ def default_db_path(base_dir: Path | None = None) -> Path:
     if is_source_checkout(root):
         return root / "data" / "h59.sqlite"
     return default_data_dir() / "h59.sqlite"
+
+
+def archive_db_path(db_path: Path, *, now: datetime | None = None) -> Path:
+    timestamp = (now or datetime.now(UTC)).strftime("%Y%m%d-%H%M%S")
+    return db_path.with_name(f"archive_{timestamp}_{db_path.name}")
 
 
 def resolve_runtime_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
@@ -152,12 +195,16 @@ def configure_daemon_logging(log_file: Path) -> None:
 
 def build_sync_child_command(args: argparse.Namespace) -> list[str]:
     cmd = [sys.executable, "-m", "h59_client.cli", "sync", "--daemon-child"]
+    if args.selector:
+        cmd.append(args.selector)
     cmd.extend(["--db", args.db, "--name", args.name, "--scan-timeout", str(args.scan_timeout)])
     cmd.extend(["--period", str(args.period_seconds)])
     if args.incremental:
         cmd.append("--incremental")
     if args.skip_capabilities:
         cmd.append("--skip-capabilities")
+    if args.capture_gatt:
+        cmd.append("--capture-gatt")
     if args.state_dir:
         cmd.extend(["--state-dir", args.state_dir])
     if args.pid_file:
@@ -195,6 +242,7 @@ def spawn_daemon(args: argparse.Namespace) -> int:
         {
             "pid": proc.pid,
             "db": args.db,
+            "selector": args.selector,
             "name": args.name,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
@@ -207,23 +255,34 @@ def spawn_daemon(args: argparse.Namespace) -> int:
     return proc.pid
 
 
+def print_sync_results(results: list[dict[str, Any]]) -> None:
+    for result in results:
+        label = result.get("nickname") or result.get("name") or result["address"]
+        print(
+            "Synced {label} ({address}) into {db_path} (sync_id={sync_id}, incremental={incremental}, queried_days={queried_days}, captured_gatt={captured_gatt})".format(
+                label=label,
+                **result,
+            )
+        )
+    if len(results) > 1:
+        print(f"Completed sync for {len(results)} devices")
+
+
 def run_foreground_sync(args: argparse.Namespace) -> int:
-    result = asyncio.run(
+    results = asyncio.run(
         sync_h59(
             db_path=args.db,
+            selector=args.selector,
             name=args.name,
             scan_timeout=args.scan_timeout,
             incremental=args.incremental,
             capture_capabilities=not args.skip_capabilities,
+            capture_gatt=args.capture_gatt,
             realtime_metrics=args.realtime,
             realtime_samples=args.realtime_samples,
         )
     )
-    print(
-        "Synced device {address} into {db_path} (sync_id={sync_id}, incremental={incremental}, queried_days={queried_days})".format(
-            **result
-        )
-    )
+    print_sync_results(results)
     return 0
 
 
@@ -250,6 +309,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
         {
             "pid": os.getpid(),
             "db": args.db,
+            "selector": args.selector,
             "name": args.name,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
@@ -260,29 +320,40 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
     )
     write_metadata(meta_file, metadata)
 
-    logger.info("starting h59 daemon loop db=%s incremental=%s period=%ss", args.db, args.incremental, args.period_seconds)
+    logger.info(
+        "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss",
+        args.db,
+        args.selector,
+        args.incremental,
+        args.period_seconds,
+    )
 
     while not stop_requested:
         cycle_started = time.time()
         try:
-            result = asyncio.run(
+            results = asyncio.run(
                 sync_h59(
                     db_path=args.db,
+                    selector=args.selector,
                     name=args.name,
                     scan_timeout=args.scan_timeout,
                     incremental=args.incremental,
                     capture_capabilities=not args.skip_capabilities,
+                    capture_gatt=args.capture_gatt,
                     realtime_metrics=args.realtime,
                     realtime_samples=args.realtime_samples,
                 )
             )
-            logger.info(
-                "sync successful device=%s sync_id=%s incremental=%s queried_days=%s",
-                result["address"],
-                result["sync_id"],
-                result["incremental"],
-                result["queried_days"],
-            )
+            logger.info("sync successful devices=%s", len(results))
+            for result in results:
+                logger.info(
+                    "sync successful device=%s sync_id=%s incremental=%s queried_days=%s captured_gatt=%s",
+                    result["address"],
+                    result["sync_id"],
+                    result["incremental"],
+                    result["queried_days"],
+                    result["captured_gatt"],
+                )
         except Exception:
             logger.exception("sync cycle failed")
 
@@ -308,6 +379,8 @@ def handle_sync(args: argparse.Namespace) -> int:
 def handle_vibrate(args: argparse.Namespace) -> int:
     result = asyncio.run(
         vibrate_h59(
+            db_path=args.db,
+            selector=args.selector,
             name=args.name,
             scan_timeout=args.scan_timeout,
             repeat=args.repeat,
@@ -323,13 +396,27 @@ def handle_vibrate(args: argparse.Namespace) -> int:
 
 
 def handle_device_info(args: argparse.Namespace) -> int:
-    result = asyncio.run(fetch_device_info_h59(name=args.name, scan_timeout=args.scan_timeout))
+    result = asyncio.run(
+        fetch_device_info_h59(
+            db_path=args.db,
+            selector=args.selector,
+            name=args.name,
+            scan_timeout=args.scan_timeout,
+        )
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
 def handle_device_capabilities(args: argparse.Namespace) -> int:
-    result = asyncio.run(fetch_capabilities_h59(name=args.name, scan_timeout=args.scan_timeout))
+    result = asyncio.run(
+        fetch_capabilities_h59(
+            db_path=args.db,
+            selector=args.selector,
+            name=args.name,
+            scan_timeout=args.scan_timeout,
+        )
+    )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -339,8 +426,81 @@ def handle_device_vibrate(args: argparse.Namespace) -> int:
 
 
 def handle_device_reboot(args: argparse.Namespace) -> int:
-    result = asyncio.run(reboot_h59(name=args.name, scan_timeout=args.scan_timeout))
+    result = asyncio.run(
+        reboot_h59(
+            db_path=args.db,
+            selector=args.selector,
+            name=args.name,
+            scan_timeout=args.scan_timeout,
+        )
+    )
     print("Sent reboot command to device {address} (packet={packet_hex})".format(**result))
+    return 0
+
+
+def handle_device_discover(args: argparse.Namespace) -> int:
+    targets = asyncio.run(
+        discover_and_store_targets(
+            db_path=args.db,
+            name=args.name,
+            scan_timeout=args.scan_timeout,
+        )
+    )
+    serialized = [
+        {
+            "address": target.address,
+            "name": target.name,
+            "device_id": target.device_id,
+            "score": target.score,
+        }
+        for target in targets
+    ]
+    print(json.dumps(serialized, indent=2, sort_keys=True))
+    return 0
+
+
+def _print_device_rows(rows: list[sqlite3.Row]) -> None:
+    if not rows:
+        print("No devices are registered")
+        return
+    print("device_id\tnickname\tname\taddress\tlast_seen_at")
+    for row in rows:
+        print(
+            "{device_id}\t{nickname}\t{name}\t{address}\t{last_seen_at}".format(
+                device_id=row["device_id"],
+                nickname=row["nickname"] or "",
+                name=row["name"] or "",
+                address=row["address"],
+                last_seen_at=row["last_seen_at"] or "",
+            )
+        )
+
+
+def handle_device_list(args: argparse.Namespace) -> int:
+    database = H59Database(args.db)
+    try:
+        _print_device_rows(database.list_devices())
+    finally:
+        database.close()
+    return 0
+
+
+def handle_device_nickname_set(args: argparse.Namespace) -> int:
+    database = H59Database(args.db)
+    try:
+        try:
+            row = database.set_device_nickname(args.selector, args.nickname)
+        except sqlite3.IntegrityError as exc:
+            raise SystemExit(f"nickname must be unique: {args.nickname}") from exc
+    finally:
+        database.close()
+    print(
+        "Set nickname for device {device_id} ({address}) to {nickname}".format(
+            device_id=row["device_id"],
+            address=row["address"],
+            nickname=row["nickname"] or "",
+        )
+    )
     return 0
 
 
@@ -361,6 +521,8 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
     if metadata:
         if "db" in metadata:
             print(f"db: {metadata['db']}")
+        if "selector" in metadata:
+            print(f"selector: {metadata['selector']}")
         if "incremental" in metadata:
             print(f"incremental: {metadata['incremental']}")
         if "period_seconds" in metadata:
@@ -393,19 +555,54 @@ def handle_daemon_stop(args: argparse.Namespace) -> int:
     return 0
 
 
-def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
+def handle_db_reset(args: argparse.Namespace) -> int:
+    db_path = Path(args.db).expanduser()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    archived_path = None
+    if db_path.exists():
+        archived_path = archive_db_path(db_path)
+        db_path.rename(archived_path)
+
+    database = H59Database(db_path)
+    database.close()
+
+    if archived_path is not None:
+        print(f"Archived existing database to {archived_path}")
+        print("The archived database was not deleted. Remove it manually if you are sure it is no longer needed.")
+    else:
+        print("No existing database was found; created a fresh database.")
+    print(f"Initialized new database at {db_path}")
+    return 0
+
+
+def add_db_argument(parser: argparse.ArgumentParser) -> None:
     db_default = str(default_db_path())
-    parser.add_argument("-i", "--incremental", action="store_true", help="sync from the latest recorded sync timestamp for this device")
-    parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
-    parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
     parser.add_argument(
         "--db",
         default=db_default,
         help="SQLite database path (default: ./data/h59.sqlite in a source checkout, otherwise an XDG data path)",
     )
-    parser.add_argument("--name", default="H59", help="preferred advertised device name")
+
+
+def add_target_arguments(parser: argparse.ArgumentParser, *, selector_required: bool = False) -> None:
+    parser.add_argument(
+        "selector",
+        nargs=None if selector_required else "?",
+        help="device selector: device_id, nickname, or address",
+    )
+    add_db_argument(parser)
+    parser.add_argument("--name", default="H59", help="preferred advertised device name for discovery")
     parser.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+
+
+def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
+    add_target_arguments(parser)
+    parser.add_argument("-i", "--incremental", action="store_true", help="sync from the latest recorded sync timestamp for each device")
+    parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
+    parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
     parser.add_argument("--skip-capabilities", action="store_true", help="skip the capability snapshot probe")
+    parser.add_argument("--capture-gatt", action="store_true", help="force a full GATT inventory capture during sync")
     parser.add_argument("--realtime", nargs="*", default=[], choices=sorted({
         "heart-rate",
         "blood-pressure",
@@ -435,35 +632,48 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.set_defaults(handler=handle_sync)
 
     vibrate_parser = subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
-    vibrate_parser.add_argument("--name", default="H59", help="preferred advertised device name")
-    vibrate_parser.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    add_target_arguments(vibrate_parser)
     vibrate_parser.add_argument("--repeat", type=int, default=1, help="number of vibration commands to send")
     vibrate_parser.add_argument("--interval", type=float, default=0.75, help="seconds between repeated vibration commands")
     vibrate_parser.set_defaults(handler=handle_vibrate)
 
-    device_parser = subparsers.add_parser("device", help="device discovery and one-shot control commands")
+    device_parser = subparsers.add_parser("device", help="device discovery, registry, and one-shot control commands")
     device_subparsers = device_parser.add_subparsers(dest="device_command", required=True)
 
+    device_discover = device_subparsers.add_parser("discover", help="scan nearby H59 devices and register them in the database")
+    add_db_argument(device_discover)
+    device_discover.add_argument("--name", default="H59", help="preferred advertised device name for discovery")
+    device_discover.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    device_discover.set_defaults(handler=handle_device_discover)
+
+    device_list = device_subparsers.add_parser("list", help="list devices registered in the database")
+    add_db_argument(device_list)
+    device_list.set_defaults(handler=handle_device_list)
+
+    device_nickname = device_subparsers.add_parser("nickname", help="manage device nicknames")
+    device_nickname_subparsers = device_nickname.add_subparsers(dest="device_nickname_command", required=True)
+    device_nickname_set = device_nickname_subparsers.add_parser("set", help="set or replace a unique nickname for a device")
+    add_db_argument(device_nickname_set)
+    device_nickname_set.add_argument("selector", help="device selector: device_id, nickname, or address")
+    device_nickname_set.add_argument("nickname", help="new unique nickname")
+    device_nickname_set.set_defaults(handler=handle_device_nickname_set)
+
     device_info = device_subparsers.add_parser("info", help="show basic device information and battery status")
-    device_info.add_argument("--name", default="H59", help="preferred advertised device name")
-    device_info.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    add_target_arguments(device_info)
     device_info.set_defaults(handler=handle_device_info)
 
     device_capabilities = device_subparsers.add_parser("capabilities", help="query and print parsed device capability flags")
-    device_capabilities.add_argument("--name", default="H59", help="preferred advertised device name")
-    device_capabilities.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    add_target_arguments(device_capabilities)
     device_capabilities.set_defaults(handler=handle_device_capabilities)
 
     device_vibrate = device_subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
-    device_vibrate.add_argument("--name", default="H59", help="preferred advertised device name")
-    device_vibrate.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    add_target_arguments(device_vibrate)
     device_vibrate.add_argument("--repeat", type=int, default=1, help="number of vibration commands to send")
     device_vibrate.add_argument("--interval", type=float, default=0.75, help="seconds between repeated vibration commands")
     device_vibrate.set_defaults(handler=handle_device_vibrate)
 
     device_reboot = device_subparsers.add_parser("reboot", help="reboot the device")
-    device_reboot.add_argument("--name", default="H59", help="preferred advertised device name")
-    device_reboot.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    add_target_arguments(device_reboot)
     device_reboot.set_defaults(handler=handle_device_reboot)
 
     daemon_parser = subparsers.add_parser("daemon", help="daemon lifecycle commands")
@@ -481,6 +691,13 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_stop.add_argument("--log-file", help="log file path for daemon mode")
     daemon_stop.set_defaults(handler=handle_daemon_stop)
 
+    db_parser = subparsers.add_parser("db", help="database lifecycle commands")
+    db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
+
+    db_reset = db_subparsers.add_parser("reset", help="archive the current database and initialize a fresh one")
+    add_db_argument(db_reset)
+    db_reset.set_defaults(handler=handle_db_reset)
+
     return parser
 
 
@@ -489,7 +706,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if hasattr(args, "period"):
         args.period_seconds = parse_duration(args.period)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        message = format_operational_error(exc)
+        if message is None:
+            raise
+        print(message, file=sys.stderr)
+        return 1
 
 
 def legacy_sync_main() -> int:

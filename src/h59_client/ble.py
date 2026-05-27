@@ -9,6 +9,8 @@ from typing import Any, Callable
 from bleak import BleakClient, BleakScanner
 
 from h59_client.protocol import (
+    DEVICE_FW_UUID,
+    DEVICE_HW_UUID,
     BIGDATA_MAGIC,
     BIGDATA_RX_CHAR_UUID,
     BIGDATA_SERVICE_UUID,
@@ -23,7 +25,7 @@ def utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
-async def discover_h59(name: str | None = None, timeout: float = 20.0) -> dict[str, Any]:
+async def discover_h59_devices(name: str | None = None, timeout: float = 20.0) -> list[dict[str, Any]]:
     devices = await BleakScanner.discover(timeout=timeout, return_adv=True)
     matches: list[tuple[int, Any, Any, dict[str, str]]] = []
     for device, adv in devices.values():
@@ -44,22 +46,30 @@ async def discover_h59(name: str | None = None, timeout: float = 20.0) -> dict[s
         if score:
             matches.append((score, device, adv, manufacturer))
 
+    matches.sort(key=lambda item: item[0], reverse=True)
+    results = []
+    for score, device, adv, manufacturer in matches:
+        results.append(
+            {
+                "score": score,
+                "device": device,
+                "advertisement": {
+                    "local_name": adv.local_name or device.name,
+                    "service_uuids": adv.service_uuids or [],
+                    "manufacturer_data": manufacturer,
+                    "service_data": {key: bytes(value).hex() for key, value in (adv.service_data or {}).items()},
+                    "rssi": getattr(adv, "rssi", None),
+                },
+            }
+        )
+    return results
+
+
+async def discover_h59(name: str | None = None, timeout: float = 20.0) -> dict[str, Any]:
+    matches = await discover_h59_devices(name=name, timeout=timeout)
     if not matches:
         raise RuntimeError("No H59-like device found during scan")
-
-    matches.sort(key=lambda item: item[0], reverse=True)
-    score, device, adv, manufacturer = matches[0]
-    return {
-        "score": score,
-        "device": device,
-        "advertisement": {
-            "local_name": adv.local_name or device.name,
-            "service_uuids": adv.service_uuids or [],
-            "manufacturer_data": manufacturer,
-            "service_data": {key: bytes(value).hex() for key, value in (adv.service_data or {}).items()},
-            "rssi": getattr(adv, "rssi", None),
-        },
-    }
+    return matches[0]
 
 
 async def ensure_services(client: BleakClient) -> None:
@@ -68,6 +78,23 @@ async def ensure_services(client: BleakClient) -> None:
         return
     except Exception:
         pass
+
+
+async def read_text_char(client: BleakClient, char_uuid: str) -> str | None:
+    char = client.services.get_characteristic(char_uuid)
+    if char is None:
+        return None
+    try:
+        value = await client.read_gatt_char(char)
+    except Exception:
+        return None
+    return bytes(value).decode("utf-8", errors="ignore") or None
+
+
+async def read_device_versions(client: BleakClient) -> tuple[str | None, str | None]:
+    hw_version = await read_text_char(client, DEVICE_HW_UUID)
+    fw_version = await read_text_char(client, DEVICE_FW_UUID)
+    return hw_version, fw_version
 
     try:
         await client.get_services()

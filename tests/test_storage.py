@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 
 from h59_client.protocol import (
@@ -243,3 +244,127 @@ def test_utc_text_normalizes_offsets_and_rejects_naive_values():
         pass
     else:
         raise AssertionError("expected naive timestamp to be rejected")
+
+
+def test_storage_supports_unique_nicknames_and_selector_lookup(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    first_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_ONE",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-25T19:00:00+00:00",
+    )
+    second_id = db.upsert_device(
+        address="CC-DD",
+        name="H59_TWO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-25T20:00:00+00:00",
+    )
+
+    row = db.set_device_nickname(str(first_id), "left-wrist")
+    assert row["nickname"] == "left-wrist"
+    assert db.get_device_by_selector("left-wrist")["device_id"] == first_id
+    assert db.get_device_by_selector("AA-BB")["device_id"] == first_id
+    assert db.get_device_by_selector(str(second_id))["address"] == "CC-DD"
+
+    try:
+        db.set_device_nickname(str(second_id), "left-wrist")
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("expected duplicate nickname to violate uniqueness")
+
+    db.close()
+
+
+def test_storage_skips_invalid_sleep_sessions(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-25T19:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-25T19:00:00+00:00", source="test")
+
+    db.record_sleep_sessions(
+        device_id,
+        sync_id,
+        reference=datetime(2026, 5, 27, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(days_ago=2, bytes_used=1, sleep_start_minutes=773, sleep_end_minutes=1538, periods=[]),
+            SleepSession(
+                days_ago=2,
+                bytes_used=10,
+                sleep_start_minutes=1380,
+                sleep_end_minutes=360,
+                periods=[SleepPeriod(stage="light", minutes=60)],
+            ),
+        ],
+        raw_packet_hex="bc27...",
+        source_command=39,
+    )
+
+    conn = db.connection
+    assert conn.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM sleep_stage_samples WHERE start_timestamp IS NULL OR end_timestamp IS NULL").fetchone()[0] == 0
+    db.close()
+
+
+def test_storage_updates_existing_sleep_session_by_bounds(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-25T19:00:00+00:00",
+    )
+    sync_id_1 = db.create_sync(device_id, started_at="2026-05-26T10:00:00+00:00", source="test")
+    sync_id_2 = db.create_sync(device_id, started_at="2026-05-27T10:00:00+00:00", source="test")
+
+    reference = datetime(2026, 5, 27, 12, 0, tzinfo=UTC)
+    bounds_session = SleepSession(
+        days_ago=1,
+        bytes_used=42,
+        sleep_start_minutes=1434,
+        sleep_end_minutes=413,
+        periods=[SleepPeriod(stage="light", minutes=60), SleepPeriod(stage="deep", minutes=60)],
+    )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id_1,
+        reference=reference,
+        sessions=[bounds_session],
+        raw_packet_hex="bc27-old",
+        source_command=39,
+    )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id_2,
+        reference=reference,
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=42,
+                sleep_start_minutes=1434,
+                sleep_end_minutes=413,
+                periods=[SleepPeriod(stage="light", minutes=70), SleepPeriod(stage="deep", minutes=70)],
+            )
+        ],
+        raw_packet_hex="bc27-new",
+        source_command=39,
+    )
+
+    conn = db.connection
+    assert conn.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 1
+    assert conn.execute("SELECT total_minutes FROM sleep_sessions").fetchone()[0] == 140
+    assert conn.execute("SELECT COUNT(*) FROM sleep_stage_samples").fetchone()[0] == 2
+    db.close()

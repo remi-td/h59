@@ -14,7 +14,7 @@ Repository:
 ## What It Does
 
 The current CLI can:
-- discover and inspect nearby H59 devices
+- discover and register nearby H59 devices
 - run one-shot or incremental syncs into SQLite
 - run as a detached periodic sync daemon
 - store decoded measurements and raw protocol packets
@@ -53,11 +53,18 @@ uv venv .venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
 
-h59 device info --name H59
-h59 sync
-h59 sync -i
+# Discover devices and populate database
+h59 device discover
+h59 device nickname set 1 wristband # You can set a nickname (eg. "wristband") to your device (eg. device_id=1)
+h59 sync -i                         # Incremental sync: if database is empty gathers all available history
 h59 sync -di --period 5m
 h59 daemon status
+```
+
+List discovered devices
+```
+h59 device list
+h59 device info --name H59
 ```
 
 ## Default Database Location
@@ -76,10 +83,15 @@ h59 <command> [options]
 
 Main commands:
 - `h59 sync`
+- `h59 sync <device_id|nickname|address>`
 - `h59 sync -i`
 - `h59 sync -di --period 5m`
+- `h59 db reset`
 - `h59 daemon status`
 - `h59 daemon stop`
+- `h59 device discover`
+- `h59 device list`
+- `h59 device nickname set <selector> <nickname>`
 - `h59 device info`
 - `h59 device capabilities`
 - `h59 device vibrate`
@@ -88,14 +100,32 @@ Main commands:
 
 The top-level `h59 vibrate` command is kept as a shorthand for `h59 device vibrate`.
 
+Incremental sync behavior:
+- if a device already has sync history in the database, `h59 sync -i` resumes from the latest recorded sync day
+- if the device has no prior sync history, `h59 sync -i` performs an initial backfill and probes backward until the device stops returning daily history, within a bounded search window
+
 ## Approach
 
 The software follows a local-first pipeline:
 
-1. Connect to the bracelet over BLE.
-2. Query supported protocol surfaces.
-3. Store decoded history plus raw evidence in SQLite.
-4. Build analysis and reporting on top of the local database.
+1. Discover and register devices when needed.
+2. Connect directly to known devices by stored address for fast interactions.
+3. Query supported protocol surfaces.
+4. Store decoded history plus raw evidence in SQLite.
+5. Build analysis and reporting on top of the local database.
+
+## Safe Database Reset
+
+To start with a fresh schema without deleting the old file:
+
+```bash
+h59 db reset
+```
+
+Behavior:
+- if the database exists, it is renamed to `archive_<YYYYMMDD-HHMISS>_h59.sqlite`
+- a new empty database is then created with the current schema
+- the archived database is kept on disk and must be deleted manually if no longer needed
 
 Research notes are kept separately so the CLI software stays clean while the reverse-engineering work remains documented.
 

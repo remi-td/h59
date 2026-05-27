@@ -98,11 +98,16 @@ One row per wearable device.
 Key fields:
 - `device_id`
 - `address`
+- `nickname`
 - `name`
 - `hw_version`
 - `fw_version`
 - `advertisement_json`
 - `last_seen_at`
+
+Notes:
+- `nickname` is optional
+- if set, it must be unique across all devices
 
 ### `syncs`
 
@@ -171,6 +176,7 @@ Every captured protocol packet, for replay and future decoding.
 
 Current uniqueness rules:
 - `devices.address`
+- `devices.nickname` when not null
 - `heart_rates(device_id, timestamp)`
 - `sport_details(device_id, timestamp)`
 - `gatt_characteristics(device_id, char_uuid, handle)`

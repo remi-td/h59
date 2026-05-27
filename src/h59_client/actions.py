@@ -5,14 +5,11 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
-from bleak import BleakClient
-
-from h59_client.ble import PacketTransport, discover_h59, ensure_services, enumerate_services
+from h59_client.ble import PacketTransport, read_device_versions
+from h59_client.devices import connect_target, resolve_single_target
 from h59_client.protocol import (
     BATTERY_PACKET,
     BLINK_TWICE_PACKET,
-    DEVICE_FW_UUID,
-    DEVICE_HW_UUID,
     REBOOT_PACKET,
     CMD_BATTERY,
     CMD_SET_TIME,
@@ -22,21 +19,10 @@ from h59_client.protocol import (
 )
 
 
-async def _connect_h59(name: str, scan_timeout: float) -> tuple[dict[str, object], BleakClient]:
-    discovered = await discover_h59(name=name, timeout=scan_timeout)
-    device = discovered["device"]
-    client = BleakClient(device, timeout=20.0)
-    await client.connect()
-    try:
-        await ensure_services(client)
-        return discovered, client
-    except Exception:
-        await client.disconnect()
-        raise
-
-
 async def vibrate_h59(
     *,
+    db_path: str,
+    selector: str | None = None,
     name: str = "H59",
     scan_timeout: float = 20.0,
     repeat: int = 1,
@@ -47,8 +33,8 @@ async def vibrate_h59(
     if interval < 0:
         raise ValueError("interval must be >= 0")
 
-    discovered, client = await _connect_h59(name, scan_timeout)
-    device = discovered["device"]
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
     try:
         transport = PacketTransport(client)
         await transport.start()
@@ -63,8 +49,9 @@ async def vibrate_h59(
         await client.disconnect()
 
     return {
-        "address": device.address,
-        "name": device.name,
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
         "repeat": repeat,
         "packet_hex": BLINK_TWICE_PACKET.hex(),
     }
@@ -72,11 +59,13 @@ async def vibrate_h59(
 
 async def reboot_h59(
     *,
+    db_path: str,
+    selector: str | None = None,
     name: str = "H59",
     scan_timeout: float = 20.0,
 ) -> dict[str, object]:
-    discovered, client = await _connect_h59(name, scan_timeout)
-    device = discovered["device"]
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
     try:
         transport = PacketTransport(client)
         await transport.start()
@@ -88,19 +77,22 @@ async def reboot_h59(
         await client.disconnect()
 
     return {
-        "address": device.address,
-        "name": device.name,
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
         "packet_hex": REBOOT_PACKET.hex(),
     }
 
 
 async def fetch_capabilities_h59(
     *,
+    db_path: str,
+    selector: str | None = None,
     name: str = "H59",
     scan_timeout: float = 20.0,
 ) -> dict[str, object]:
-    discovered, client = await _connect_h59(name, scan_timeout)
-    device = discovered["device"]
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
     try:
         transport = PacketTransport(client)
         await transport.start()
@@ -113,8 +105,9 @@ async def fetch_capabilities_h59(
         await client.disconnect()
 
     return {
-        "address": device.address,
-        "name": device.name,
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
         "packet_hex": packet.hex(),
         "capabilities": parse_capabilities(packet),
     }
@@ -122,21 +115,15 @@ async def fetch_capabilities_h59(
 
 async def fetch_device_info_h59(
     *,
+    db_path: str,
+    selector: str | None = None,
     name: str = "H59",
     scan_timeout: float = 20.0,
 ) -> dict[str, object]:
-    discovered, client = await _connect_h59(name, scan_timeout)
-    device = discovered["device"]
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
     try:
-        services = await enumerate_services(client)
-        hw_version = None
-        fw_version = None
-        for service in services:
-            for char in service.get("chars", []):
-                if char.get("uuid") == DEVICE_HW_UUID:
-                    hw_version = char.get("read_value_text") or None
-                if char.get("uuid") == DEVICE_FW_UUID:
-                    fw_version = char.get("read_value_text") or None
+        hw_version, fw_version = await read_device_versions(client)
 
         transport = PacketTransport(client)
         await transport.start()
@@ -150,11 +137,12 @@ async def fetch_device_info_h59(
         await client.disconnect()
 
     return {
-        "address": device.address,
-        "name": device.name,
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
         "hw_version": hw_version,
         "fw_version": fw_version,
-        "advertisement": discovered["advertisement"],
+        "advertisement": target.advertisement,
         "battery_level": battery.battery_level,
         "charging": battery.charging,
     }

@@ -3,29 +3,29 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from bleak import BleakClient
-
 from h59_client import date_utils
-from h59_client.ble import BigDataTransport, PacketTransport, discover_h59, ensure_services, enumerate_services
+from h59_client.ble import BigDataTransport, PacketTransport, enumerate_services, read_device_versions
+from h59_client.devices import DeviceTarget, connect_target, discover_targets, resolve_single_target
 from h59_client.protocol import (
     BATTERY_PACKET,
     BIGDATA_BLOOD_OXYGEN_ID,
-    BIGDATA_SLEEP_ID,
+    BIGDATA_MAGIC,
     BIGDATA_SERVICE_UUID,
+    BIGDATA_SLEEP_ID,
     CMD_BATTERY,
+    CMD_GET_STEP_SOMEDAY,
+    CMD_HEART_RATE_LOG_SETTINGS,
     CMD_HRV_HISTORY,
     CMD_PRESSURE_HISTORY,
-    CMD_HEART_RATE_LOG_SETTINGS,
     CMD_READ_HEART_RATE,
+    CMD_SET_TIME,
     CMD_START_REAL_TIME,
-    CMD_GET_STEP_SOMEDAY,
     READ_HEART_RATE_LOG_SETTINGS_PACKET,
     ActivityBlockParser,
-    BIGDATA_MAGIC,
     HeartRateDayParser,
     HrvHistoryParser,
     NoData,
@@ -38,30 +38,25 @@ from h59_client.protocol import (
     parse_capabilities,
     parse_heart_rate_log_settings,
     parse_realtime_packet,
-    read_hrv_history_packet,
     read_heart_rate_packet,
+    read_hrv_history_packet,
     read_pressure_history_packet,
     read_steps_packet,
     set_time_packet,
     start_realtime_packet,
     stop_realtime_packet,
-    DEVICE_FW_UUID,
-    DEVICE_HW_UUID,
-    CMD_SET_TIME,
 )
 from h59_client.storage import H59Database
 
+INITIAL_BACKFILL_MAX_DAYS = 60
+INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS = 2
 
-def _extract_device_info(services: list[dict[str, Any]]) -> tuple[str | None, str | None]:
-    hw_version = None
-    fw_version = None
-    for service in services:
-        for char in service.get("chars", []):
-            if char.get("uuid") == DEVICE_HW_UUID:
-                hw_version = char.get("read_value_text") or None
-            if char.get("uuid") == DEVICE_FW_UUID:
-                fw_version = char.get("read_value_text") or None
-    return hw_version, fw_version
+
+def determine_history_selector(*, now: datetime, target: datetime) -> int:
+    day_offset = (date_utils.start_of_day(now).date() - date_utils.start_of_day(target).date()).days
+    if day_offset < 0:
+        raise ValueError("target cannot be in the future")
+    return day_offset
 
 
 async def _query_battery(transport: PacketTransport):
@@ -110,9 +105,9 @@ async def _query_capabilities(transport: PacketTransport):
     return parse_capabilities(packet), packet.hex(), observed_at
 
 
-async def _query_pressure_history(transport: PacketTransport, *, target: datetime):
+async def _query_pressure_history(transport: PacketTransport, *, now: datetime, target: datetime):
     parser = PressureHistoryParser()
-    await transport.send_packet(read_pressure_history_packet())
+    await transport.send_packet(read_pressure_history_packet(determine_history_selector(now=now, target=target)))
     packets: list[str] = []
     observed_at = date_utils.utc_now().isoformat()
     while True:
@@ -124,9 +119,9 @@ async def _query_pressure_history(transport: PacketTransport, *, target: datetim
         return parsed, packets, observed_at, target
 
 
-async def _query_hrv_history(transport: PacketTransport, *, target: datetime):
+async def _query_hrv_history(transport: PacketTransport, *, now: datetime, target: datetime):
     parser = HrvHistoryParser()
-    await transport.send_packet(read_hrv_history_packet())
+    await transport.send_packet(read_hrv_history_packet(determine_history_selector(now=now, target=target)))
     packets: list[str] = []
     observed_at = date_utils.utc_now().isoformat()
     while True:
@@ -174,44 +169,55 @@ def determine_sync_dates(
     return list(date_utils.dates_between(start, now))
 
 
-async def sync_h59(
+def determine_initial_backfill_dates(
+    *,
+    now: datetime,
+    max_days: int = INITIAL_BACKFILL_MAX_DAYS,
+) -> list[datetime]:
+    if max_days < 1:
+        raise ValueError("max_days must be >= 1")
+    today = date_utils.start_of_day(now)
+    return [today - timedelta(days=day_offset) for day_offset in range(max_days)]
+
+
+async def sync_one_h59(
     *,
     db_path: str | Path,
-    name: str = "H59",
-    scan_timeout: float = 20.0,
+    target: DeviceTarget,
     incremental: bool = False,
     capture_capabilities: bool = True,
+    capture_gatt: bool | None = None,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
 ) -> dict[str, Any]:
-    discovered = await discover_h59(name=name, timeout=scan_timeout)
-    device = discovered["device"]
-    advertisement = discovered["advertisement"]
     database = H59Database(db_path)
 
     try:
-        async with BleakClient(device, timeout=20.0) as client:
-            await ensure_services(client)
-            services = await enumerate_services(client)
-            hw_version, fw_version = _extract_device_info(services)
+        client = await connect_target(target, timeout=20.0)
+        try:
             now = date_utils.utc_now()
+            hw_version, fw_version = await read_device_versions(client)
+            services = None
 
             device_id = database.upsert_device(
-                address=device.address,
-                name=advertisement.get("local_name") or device.name,
-                advertisement=advertisement,
+                address=target.address,
+                name=target.name,
+                advertisement=target.advertisement,
                 hw_version=hw_version,
                 fw_version=fw_version,
-                last_seen_at=now.isoformat(),
+                last_seen_at=now,
             )
             last_sync_at = database.get_latest_sync_timestamp(device_id) if incremental else None
             sync_id = database.create_sync(
                 device_id,
-                started_at=now.isoformat(),
+                started_at=now,
                 source="h59_client.sync",
             )
 
-            database.record_gatt_snapshot(device_id, sync_id, observed_at=now.isoformat(), services=services)
+            should_capture_gatt = capture_gatt if capture_gatt is not None else not database.has_gatt_snapshot(device_id)
+            if should_capture_gatt:
+                services = await enumerate_services(client)
+                database.record_gatt_snapshot(device_id, sync_id, observed_at=now, services=services)
 
             def record_packet(direction: str, channel_uuid: str, payload: bytearray, observed_at: str) -> None:
                 command_id = None
@@ -259,28 +265,6 @@ async def sync_h59(
                         raw_packet_hex=capability_packet_hex,
                     )
 
-                pressure_history, pressure_packets, _pressure_ts, pressure_target = await _query_pressure_history(transport, target=now)
-                if not isinstance(pressure_history, NoData):
-                    database.record_pressure_history(
-                        device_id,
-                        sync_id,
-                        target=pressure_target,
-                        history=pressure_history,
-                        raw_packet_hex=",".join(pressure_packets),
-                        source_command=CMD_PRESSURE_HISTORY,
-                    )
-
-                hrv_history, hrv_packets, _hrv_ts, hrv_target = await _query_hrv_history(transport, target=now)
-                if not isinstance(hrv_history, NoData):
-                    database.record_hrv_history(
-                        device_id,
-                        sync_id,
-                        target=hrv_target,
-                        history=hrv_history,
-                        raw_packet_hex=",".join(hrv_packets),
-                        source_command=CMD_HRV_HISTORY,
-                    )
-
                 if bigdata_transport is not None:
                     sleep_sessions, sleep_payload_hex, _sleep_ts = await _query_bigdata_sleep(bigdata_transport)
                     if sleep_sessions:
@@ -307,9 +291,58 @@ async def sync_h59(
                             source_command=BIGDATA_BLOOD_OXYGEN_ID,
                         )
 
-                targets = determine_sync_dates(now=now, last_sync_at=last_sync_at, incremental=incremental)
-                for target in targets:
-                    hr_day, hr_packets, _ = await _query_heart_rate_day(transport, target=target)
+                if incremental and last_sync_at is None:
+                    targets = determine_initial_backfill_dates(now=now)
+                    empty_history_streak = 0
+                else:
+                    targets = determine_sync_dates(now=now, last_sync_at=last_sync_at, incremental=incremental)
+                    empty_history_streak = None
+
+                attempted_days = 0
+                pressure_history_exhausted = False
+                hrv_history_exhausted = False
+                for target_day in targets:
+                    attempted_days += 1
+                    day_offset = determine_history_selector(now=now, target=target_day)
+
+                    if not pressure_history_exhausted:
+                        pressure_history, pressure_packets, _pressure_ts, pressure_target = await _query_pressure_history(
+                            transport,
+                            now=now,
+                            target=target_day,
+                        )
+                        if isinstance(pressure_history, NoData):
+                            pressure_history_exhausted = day_offset > 0
+                        else:
+                            database.record_pressure_history(
+                                device_id,
+                                sync_id,
+                                target=pressure_target,
+                                history=pressure_history,
+                                raw_packet_hex=",".join(pressure_packets),
+                                source_command=CMD_PRESSURE_HISTORY,
+                            )
+
+                    if not hrv_history_exhausted:
+                        hrv_history, hrv_packets, _hrv_ts, hrv_target = await _query_hrv_history(
+                            transport,
+                            now=now,
+                            target=target_day,
+                        )
+                        if isinstance(hrv_history, NoData):
+                            hrv_history_exhausted = day_offset > 0
+                        else:
+                            database.record_hrv_history(
+                                device_id,
+                                sync_id,
+                                target=hrv_target,
+                                history=hrv_history,
+                                raw_packet_hex=",".join(hrv_packets),
+                                source_command=CMD_HRV_HISTORY,
+                            )
+
+                    hr_day, hr_packets, _ = await _query_heart_rate_day(transport, target=target_day)
+                    hr_has_data = not isinstance(hr_day, NoData)
                     if not isinstance(hr_day, NoData):
                         database.record_heart_rate_day(
                             device_id,
@@ -318,8 +351,8 @@ async def sync_h59(
                             raw_packet_hex=",".join(hr_packets),
                         )
 
-                    day_offset = (date_utils.start_of_day(now).date() - date_utils.start_of_day(target).date()).days
                     blocks, block_packets, _ = await _query_steps(transport, day_offset=day_offset)
+                    steps_has_data = not isinstance(blocks, NoData)
                     if not isinstance(blocks, NoData):
                         database.record_activity_blocks(
                             device_id,
@@ -327,6 +360,14 @@ async def sync_h59(
                             blocks=blocks,
                             raw_packet_hex=",".join(block_packets),
                         )
+
+                    if empty_history_streak is not None:
+                        if hr_has_data or steps_has_data:
+                            empty_history_streak = 0
+                        else:
+                            empty_history_streak += 1
+                            if empty_history_streak >= INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS:
+                                break
 
                 if realtime_metrics:
                     for metric_name in realtime_metrics:
@@ -343,23 +384,79 @@ async def sync_h59(
                 if bigdata_transport is not None:
                     await bigdata_transport.stop()
                 await transport.stop()
-                database.finish_sync(sync_id, finished_at=date_utils.utc_now().isoformat())
+                database.finish_sync(sync_id, finished_at=date_utils.utc_now())
+        finally:
+            await client.disconnect()
 
         return {
             "device_id": device_id,
             "sync_id": sync_id,
-            "address": device.address,
+            "address": target.address,
+            "name": target.name,
+            "nickname": target.nickname,
             "db_path": str(db_path),
-            "queried_days": len(targets),
+            "queried_days": attempted_days,
             "incremental": incremental,
             "last_sync_at": last_sync_at.isoformat() if last_sync_at is not None else None,
+            "captured_gatt": bool(should_capture_gatt),
         }
     finally:
         database.close()
 
 
+async def sync_h59(
+    *,
+    db_path: str | Path,
+    selector: str | None = None,
+    name: str = "H59",
+    scan_timeout: float = 20.0,
+    incremental: bool = False,
+    capture_capabilities: bool = True,
+    capture_gatt: bool | None = None,
+    realtime_metrics: list[str] | None = None,
+    realtime_samples: int = 3,
+) -> list[dict[str, Any]]:
+    if selector:
+        target = await resolve_single_target(
+            db_path=str(db_path),
+            selector=selector,
+            name=name,
+            scan_timeout=scan_timeout,
+        )
+        return [
+            await sync_one_h59(
+                db_path=db_path,
+                target=target,
+                incremental=incremental,
+                capture_capabilities=capture_capabilities,
+                capture_gatt=capture_gatt,
+                realtime_metrics=realtime_metrics,
+                realtime_samples=realtime_samples,
+            )
+        ]
+
+    discovered_targets = await discover_targets(name=name, timeout=scan_timeout)
+    if not discovered_targets:
+        raise RuntimeError("No H59-like device found during scan")
+
+    results = []
+    for target in discovered_targets:
+        result = await sync_one_h59(
+            db_path=db_path,
+            target=target,
+            incremental=incremental,
+            capture_capabilities=capture_capabilities,
+            capture_gatt=capture_gatt,
+            realtime_metrics=realtime_metrics,
+            realtime_samples=realtime_samples,
+        )
+        results.append(result)
+    return results
+
+
 def main() -> None:
     from h59_client.cli import legacy_sync_main
+
     raise SystemExit(legacy_sync_main())
 
 

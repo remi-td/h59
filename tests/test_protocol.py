@@ -11,6 +11,8 @@ from h59_client.protocol import (
     parse_capabilities,
     parse_heart_rate_log_settings,
     parse_realtime_packet,
+    read_hrv_history_packet,
+    read_pressure_history_packet,
 )
 
 
@@ -111,6 +113,16 @@ def test_parse_realtime_packet():
     assert parsed.value == 0
 
 
+def test_pressure_history_packet_uses_selector_byte():
+    packet = read_pressure_history_packet(3)
+    assert packet.hex() == "3703000000000000000000000000003a"
+
+
+def test_hrv_history_packet_uses_selector_byte():
+    packet = read_hrv_history_packet(2)
+    assert packet.hex() == "3902000000000000000000000000003b"
+
+
 def test_parse_pressure_history_packets():
     parser = PressureHistoryParser()
     packets = [
@@ -162,9 +174,30 @@ def test_parse_bigdata_sleep_payload():
     assert sessions[0].days_ago == 1
     assert sessions[0].periods[0].stage == "light"
     assert sessions[0].periods[0].minutes == 38
+    assert sessions[0].has_valid_bounds() is True
+    assert sum(period.minutes for period in sessions[0].periods) == 491
     start_ts, end_ts = sessions[0].resolved_bounds(datetime(2026, 5, 26, 20, 58, 20, tzinfo=UTC))
     assert start_ts == datetime(2026, 5, 25, 23, 31, tzinfo=UTC)
     assert end_ts == datetime(2026, 5, 26, 7, 42, tzinfo=UTC)
+    assert sessions[1].days_ago == 0
+    assert sessions[1].has_valid_bounds() is True
+
+
+def test_parse_bigdata_sleep_payload_with_three_blocks():
+    payload = bytes.fromhex(
+        "bc279900fef203022c8305ce01022603140212041102160412022003100224040e031204160209033a041b0233040c020d050a0228012a9a059d010219040f0318022204120210041203140412032d0233041a021e041b02120418020105030206003c8c0511020223030b040d0214031a0410021c04110221040f022a040a021c0339020a0416022304080509020a0503021f0505020405060217041c0204"
+    )
+
+    sessions = parse_bigdata_sleep(payload)
+
+    assert len(sessions) == 3
+    assert sessions[0].days_ago == 2
+    assert sessions[1].days_ago == 1
+    assert sessions[2].days_ago == 0
+    assert sessions[1].sleep_start_minutes == 1434
+    assert sessions[1].sleep_end_minutes == 413
+    assert sessions[2].sleep_start_minutes == 1420
+    assert sessions[2].sleep_end_minutes == 529
 
 
 def test_parse_bigdata_blood_oxygen_payload():
@@ -178,3 +211,6 @@ def test_parse_bigdata_blood_oxygen_payload():
     assert len(history.samples) > 40
     assert history.samples[0].min_percent == 97
     assert history.samples[0].max_percent == 97
+    samples = history.samples_with_times(datetime(2026, 5, 26, 12, 0, tzinfo=UTC))
+    assert len(samples) == 48
+    assert samples[-1][1] == datetime(2026, 5, 26, 23, 30, tzinfo=UTC)
