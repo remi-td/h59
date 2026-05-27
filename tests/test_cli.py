@@ -8,6 +8,7 @@ from h59_client.cli import (
     build_parser,
     default_db_path,
     default_state_dir,
+    format_daemon_operational_notice,
     format_operational_error,
     main,
     parse_duration,
@@ -158,6 +159,28 @@ def test_format_operational_error_for_bluetooth_unavailable():
     assert message is not None
     assert "Bluetooth is not available" in message
     assert "Bluetooth permission" in message
+
+
+def test_format_operational_error_for_timeout():
+    message = format_operational_error(TimeoutError())
+    assert message is not None
+    assert "Timed out while trying to reach an H59 device over Bluetooth." in message
+    assert "disconnect or unpair it temporarily" in message
+
+
+def test_format_daemon_operational_notice_for_missing_device_scan():
+    message = format_daemon_operational_notice(RuntimeError("No H59-like device found during scan"))
+    assert message is not None
+    assert message.startswith("no device observed during sync cycle:")
+    assert "No H59 device was discovered." in message
+    assert "\n" not in message
+
+
+def test_format_daemon_operational_notice_for_timeout():
+    message = format_daemon_operational_notice(TimeoutError())
+    assert message is not None
+    assert message.startswith("no device observed during sync cycle:")
+    assert "Timed out while trying to reach an H59 device over Bluetooth." in message
 
 
 def test_main_returns_clean_error_for_known_runtime_failure(monkeypatch, capsys):

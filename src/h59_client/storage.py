@@ -425,6 +425,31 @@ class H59Database:
             return None
         return datetime.fromisoformat(row[0])
 
+    def _get_latest_metric_timestamp(self, table: str, device_id: int) -> datetime | None:
+        row = self.connection.execute(
+            f"SELECT MAX(timestamp) FROM {table} WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return datetime.fromisoformat(row[0])
+
+    def _overlap_cutoff(
+        self,
+        *,
+        table: str,
+        device_id: int,
+        target_day: datetime,
+        interval_minutes: int,
+        overlap_periods: int = 1,
+    ) -> datetime | None:
+        latest = self._get_latest_metric_timestamp(table, device_id)
+        if latest is None:
+            return None
+        if latest.astimezone(UTC).date() != target_day.astimezone(UTC).date():
+            return None
+        return latest - timedelta(minutes=interval_minutes * overlap_periods)
+
     def record_gatt_snapshot(self, device_id: int, sync_id: int, *, observed_at: str | datetime, services: list[dict[str, Any]]) -> None:
         observed_at_text = utc_text(observed_at)
         for service in services:
@@ -562,6 +587,14 @@ class H59Database:
         blocks: list[ActivityBlock],
         raw_packet_hex: str | None = None,
     ) -> None:
+        if not blocks:
+            return
+        cutoff = self._overlap_cutoff(
+            table="sport_details",
+            device_id=device_id,
+            target_day=blocks[0].timestamp,
+            interval_minutes=15,
+        )
         self.connection.executemany(
             """
             INSERT INTO sport_details(calories, steps, distance, timestamp, device_id, sync_id, time_index, source_command, raw_packet_hex)
@@ -588,6 +621,7 @@ class H59Database:
                     raw_packet_hex,
                 )
                 for block in blocks
+                if cutoff is None or block.timestamp >= cutoff
             ],
         )
         self.connection.commit()
@@ -600,9 +634,17 @@ class H59Database:
         day: HeartRateDay,
         raw_packet_hex: str | None = None,
     ) -> None:
+        cutoff = self._overlap_cutoff(
+            table="heart_rates",
+            device_id=device_id,
+            target_day=day.timestamp,
+            interval_minutes=max(1, day.range),
+        )
         rows = []
         for reading, timestamp in day.readings_with_times():
             if reading == 0:
+                continue
+            if cutoff is not None and timestamp < cutoff:
                 continue
             rows.append((reading, utc_text(timestamp), device_id, sync_id, 21, raw_packet_hex))
         self.connection.executemany(
@@ -767,9 +809,17 @@ class H59Database:
         source_command: int,
         interval_minutes: int = 30,
     ) -> None:
+        cutoff = self._overlap_cutoff(
+            table="blood_oxygen_samples",
+            device_id=device_id,
+            target_day=target,
+            interval_minutes=interval_minutes,
+        )
         rows = []
         for sample_index, (sample, timestamp) in enumerate(history.samples_with_times(target, interval_minutes=interval_minutes)):
             if sample.min_percent <= 0 or sample.max_percent <= 0:
+                continue
+            if cutoff is not None and timestamp < cutoff:
                 continue
             rows.append(
                 (
@@ -823,9 +873,17 @@ class H59Database:
         raw_packet_hex: str,
         source_command: int,
     ) -> None:
+        cutoff = self._overlap_cutoff(
+            table="pressure_samples",
+            device_id=device_id,
+            target_day=target,
+            interval_minutes=max(1, history.range_minutes),
+        )
         rows = []
         for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target)):
             if value == 0:
+                continue
+            if cutoff is not None and timestamp < cutoff:
                 continue
             rows.append(
                 (
@@ -873,9 +931,17 @@ class H59Database:
         raw_packet_hex: str,
         source_command: int,
     ) -> None:
+        cutoff = self._overlap_cutoff(
+            table="hrv_samples",
+            device_id=device_id,
+            target_day=target,
+            interval_minutes=max(1, history.range_minutes),
+        )
         rows = []
         for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target)):
             if value == 0:
+                continue
+            if cutoff is not None and timestamp < cutoff:
                 continue
             rows.append(
                 (

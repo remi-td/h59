@@ -368,3 +368,85 @@ def test_storage_updates_existing_sleep_session_by_bounds(tmp_path):
     assert conn.execute("SELECT total_minutes FROM sleep_sessions").fetchone()[0] == 140
     assert conn.execute("SELECT COUNT(*) FROM sleep_stage_samples").fetchone()[0] == 2
     db.close()
+
+
+def test_storage_limits_same_day_heart_rate_rewrites_to_one_overlap_period(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-27T12:00:00+00:00",
+    )
+    sync_id_1 = db.create_sync(device_id, started_at="2026-05-27T12:00:00+00:00", source="test")
+    sync_id_2 = db.create_sync(device_id, started_at="2026-05-27T12:05:00+00:00", source="test")
+
+    db.record_heart_rate_day(
+        device_id,
+        sync_id_1,
+        day=HeartRateDay(
+            heart_rates=[60, 61, 62, 0],
+            timestamp=datetime(2026, 5, 27, 0, 0, tzinfo=UTC),
+            size=1,
+            index=3,
+            range=5,
+        ),
+        raw_packet_hex="first",
+    )
+    db.record_heart_rate_day(
+        device_id,
+        sync_id_2,
+        day=HeartRateDay(
+            heart_rates=[99, 61, 62, 63],
+            timestamp=datetime(2026, 5, 27, 0, 0, tzinfo=UTC),
+            size=1,
+            index=4,
+            range=5,
+        ),
+        raw_packet_hex="second",
+    )
+
+    rows = db.connection.execute(
+        "SELECT timestamp, reading, sync_id FROM heart_rates ORDER BY timestamp"
+    ).fetchall()
+    assert [row["reading"] for row in rows] == [60, 61, 62, 63]
+    assert [row["sync_id"] for row in rows] == [sync_id_1, sync_id_2, sync_id_2, sync_id_2]
+    db.close()
+
+
+def test_storage_limits_same_day_activity_rewrites_to_one_overlap_period(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-27T12:00:00+00:00",
+    )
+    sync_id_1 = db.create_sync(device_id, started_at="2026-05-27T12:00:00+00:00", source="test")
+    sync_id_2 = db.create_sync(device_id, started_at="2026-05-27T12:15:00+00:00", source="test")
+
+    first_blocks = [
+        ActivityBlock(year=2026, month=5, day=27, time_index=0, calories=10, steps=100, distance=50),
+        ActivityBlock(year=2026, month=5, day=27, time_index=1, calories=11, steps=101, distance=51),
+        ActivityBlock(year=2026, month=5, day=27, time_index=2, calories=12, steps=102, distance=52),
+    ]
+    second_blocks = [
+        ActivityBlock(year=2026, month=5, day=27, time_index=0, calories=99, steps=999, distance=999),
+        ActivityBlock(year=2026, month=5, day=27, time_index=1, calories=11, steps=101, distance=51),
+        ActivityBlock(year=2026, month=5, day=27, time_index=2, calories=12, steps=102, distance=52),
+        ActivityBlock(year=2026, month=5, day=27, time_index=3, calories=13, steps=103, distance=53),
+    ]
+
+    db.record_activity_blocks(device_id, sync_id_1, blocks=first_blocks, raw_packet_hex="first")
+    db.record_activity_blocks(device_id, sync_id_2, blocks=second_blocks, raw_packet_hex="second")
+
+    rows = db.connection.execute(
+        "SELECT timestamp, steps, sync_id FROM sport_details ORDER BY timestamp"
+    ).fetchall()
+    assert [row["steps"] for row in rows] == [100, 101, 102, 103]
+    assert [row["sync_id"] for row in rows] == [sync_id_1, sync_id_2, sync_id_2, sync_id_2]
+    db.close()

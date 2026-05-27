@@ -42,6 +42,12 @@ def format_operational_error(exc: Exception) -> str | None:
             "Check that the device is nearby, charged, and advertising over Bluetooth.\n"
             "If it is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
         )
+    if isinstance(exc, TimeoutError):
+        return (
+            "Timed out while trying to reach an H59 device over Bluetooth.\n"
+            "Check that the device is nearby, awake, and advertising.\n"
+            "If it is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
+        )
     if BleakBluetoothNotAvailableError is not None and isinstance(exc, BleakBluetoothNotAvailableError):
         return (
             "Bluetooth is not available for H59 discovery right now.\n"
@@ -51,14 +57,24 @@ def format_operational_error(exc: Exception) -> str | None:
     if isinstance(exc, BleakError) and (
         "Bluetooth is unsupported" in message
         or ("Bluetooth" in message and "not available" in message.lower())
+        or "timed out" in message.lower()
+        or "timeout" in message.lower()
         or "unsupported" in message.lower()
     ):
         return (
             "Bluetooth is not available for H59 discovery right now.\n"
-            "Check that Bluetooth is enabled and that this process has Bluetooth permission.\n"
+            "Check that Bluetooth is enabled, that this process has Bluetooth permission, and that the device is reachable.\n"
             "If the bracelet is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
         )
     return None
+
+
+def format_daemon_operational_notice(exc: Exception) -> str | None:
+    message = format_operational_error(exc)
+    if message is None:
+        return None
+    compact = " ".join(part.strip() for part in message.splitlines() if part.strip())
+    return f"no device observed during sync cycle: {compact}"
 
 
 def parse_duration(value: str) -> int:
@@ -354,8 +370,12 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     result["queried_days"],
                     result["captured_gatt"],
                 )
-        except Exception:
-            logger.exception("sync cycle failed")
+        except Exception as exc:
+            notice = format_daemon_operational_notice(exc)
+            if notice is not None:
+                logger.info(notice)
+            else:
+                logger.exception("sync cycle failed")
 
         sleep_seconds = max(0, args.period_seconds - (time.time() - cycle_started))
         deadline = time.time() + sleep_seconds
