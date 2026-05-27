@@ -3,10 +3,9 @@
 `h59-local` is a CLI for locally collecting and analyzing data from the H59 smart band.
 
 The goal is simple:
-- sync data directly over BLE
-- keep storage and analytics local
-- avoid vendor cloud dependencies
-- enable privacy-first analytics on inexpensive wearable hardware
+- sync data directly over Bluetooth Low Energy (BLE)
+- keep storage and analytics local, avoiding vendor saas dependencies
+- enable private analytics on inexpensive wearable hardware with open algorithms
 
 Repository:
 - `https://github.com/remi-td/h59`
@@ -19,6 +18,7 @@ The current CLI can:
 - run as a detached periodic sync daemon
 - store decoded measurements and raw protocol packets
 - trigger simple device actions such as vibration and reboot
+- generate markdown reports for a device and validate data completeness
 
 ## Install
 
@@ -34,37 +34,38 @@ Upgrade an existing install:
 uv tool install --force git+https://github.com/remi-td/h59.git
 ```
 
-### One-line installer
-
-```bash
-curl -LsSf https://raw.githubusercontent.com/remi-td/h59/main/install.sh | sh
-```
-
-If `uv` is not already installed, the script bootstraps it first.
-
-## Quickstart
-
-Copy and paste:
-
+### From source
 ```bash
 git clone https://github.com/remi-td/h59.git
 cd h59
 uv venv .venv
 source .venv/bin/activate
 uv pip install -e ".[dev]"
+```
 
+## Quickstart
+
+Discover devices, run an initial sync:
+
+```bash
 # Discover devices and populate database
 h59 device discover
 h59 device nickname set 1 wristband # You can set a nickname (eg. "wristband") to your device (eg. device_id=1)
 h59 sync -i                         # Incremental sync: if database is empty gathers all available history
-h59 sync -di --period 5m
+h59 vibrate 1                       # You can use the nickname (eg. "wristband"), device_id or address
+```
+
+Start the daemon service to sync every 15 minutes:
+```bash
+h59 sync -di --period 15m
 h59 daemon status
 ```
 
-List discovered devices
-```
+List discovered devices:
+```bash
 h59 device list
-h59 device info --name H59
+h59 device info 1               # You can use the nickname (eg. "wristband"), device_id or address
+h59 report 1 --output report.md
 ```
 
 ## Default Database Location
@@ -86,19 +87,26 @@ Main commands:
 - `h59 sync <device_id|nickname|address>`
 - `h59 sync -i`
 - `h59 sync -di --period 5m`
+- `h59 report [device_id|nickname|address]`
 - `h59 db reset`
 - `h59 daemon status`
 - `h59 daemon stop`
 - `h59 device discover`
 - `h59 device list`
 - `h59 device nickname set <selector> <nickname>`
-- `h59 device info`
-- `h59 device capabilities`
-- `h59 device vibrate`
-- `h59 device reboot`
-- `h59 vibrate`
+- `h59 device info [device_id|nickname|address]`
+- `h59 device capabilities [device_id|nickname|address]`
+- `h59 device vibrate [device_id|nickname|address]`
+- `h59 device reboot [device_id|nickname|address]`
+- `h59 vibrate [device_id|nickname|address]`
 
 The top-level `h59 vibrate` command is kept as a shorthand for `h59 device vibrate`.
+
+Selector behavior:
+- `h59 sync` syncs all currently available H59 devices
+- `h59 sync <selector>` targets one registered device by `device_id`, `nickname`, or stored address
+- device action commands without a selector use the preferred known device from the local database
+- `h59 report` without a selector uses the preferred known device from the local database
 
 Incremental sync behavior:
 - if a device already has sync history in the database, `h59 sync -i` resumes from the latest recorded sync day

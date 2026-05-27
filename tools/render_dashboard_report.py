@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from h59_client.dashboard_report import render_health_dashboard_report
+from h59_client.report import render_health_dashboard_report
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -28,6 +28,7 @@ def utc_now_iso() -> str:
 async def discover_h59_devices(name: str | None = None, timeout: float = 20.0) -> list[dict[str, Any]]:
     devices = await BleakScanner.discover(timeout=timeout, return_adv=True)
     matches: list[tuple[int, Any, Any, dict[str, str]]] = []
+    generic_name = not name or name == "H59"
     for device, adv in devices.values():
         local_name = adv.local_name or device.name or ""
         service_uuids = [value.lower() for value in (adv.service_uuids or [])]
@@ -37,7 +38,9 @@ async def discover_h59_devices(name: str | None = None, timeout: float = 20.0) -
             score += 100
         elif name and name in local_name:
             score += 80
-        if local_name.startswith("H59"):
+        elif not generic_name:
+            continue
+        if generic_name and local_name.startswith("H59"):
             score += 60
         if "0000fe00-0000-1000-8000-00805f9b34fb" in service_uuids:
             score += 40

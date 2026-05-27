@@ -27,6 +27,7 @@ h59 <command> [options]
 
 Commands:
 - `sync`
+- `report`
 - `device`
 - `daemon`
 - `vibrate`
@@ -58,6 +59,14 @@ Detached periodic incremental sync:
 
 ```bash
 h59 sync -di --period 5m
+```
+
+Generate a markdown report:
+
+```bash
+h59 report
+h59 report left-wrist
+h59 report left-wrist --date 2026-05-27 --output report.md
 ```
 
 Discover and register devices:
@@ -95,6 +104,23 @@ Safe database reset:
 h59 db reset
 ```
 
+## `report`
+
+Purpose:
+- render a markdown summary report for one device from the local SQLite database
+- surface key metrics and validate data completeness against the stored history
+
+Behavior:
+- `h59 report` uses the preferred known device from the local database
+- `h59 report <selector>` targets one registered device by `device_id`, `nickname`, or stored `address`
+- the selected day defaults to the latest day found in the database for that device
+
+Common flags:
+- `--db <path>`
+- `[selector]`
+- `--date <YYYY-MM-DD>`
+- `--output <path>`
+
 ## `sync`
 
 Purpose:
@@ -114,7 +140,6 @@ Common flags:
 - `--period <duration>`
 - `--db <path>`
 - `[selector]`
-- `--name <device-name>`
 - `--scan-timeout <seconds>`
 - `--skip-capabilities`
 - `--capture-gatt`

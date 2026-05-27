@@ -24,18 +24,37 @@ try:
 except ImportError:  # pragma: no cover - older bleak versions do not expose this class
     BleakBluetoothNotAvailableError = None  # type: ignore[assignment]
 
+try:
+    from bleak.exc import BleakDeviceNotFoundError
+except ImportError:  # pragma: no cover - older bleak versions do not expose this class
+    BleakDeviceNotFoundError = None  # type: ignore[assignment]
+
 from h59_client import __version__
 from h59_client.actions import fetch_capabilities_h59, fetch_device_info_h59, reboot_h59, vibrate_h59
 from h59_client.devices import discover_and_store_targets
+from h59_client.report import render_health_dashboard_report
 from h59_client.storage import H59Database
 from h59_client.sync import sync_h59
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_DISCOVERY_NAME = "H59"
 
 
 def format_operational_error(exc: Exception) -> str | None:
     message = str(exc)
+    if message == "database does not contain any device":
+        return (
+            "No devices are registered in the local database.\n"
+            "Use `h59 device discover` first, then run a sync before generating a report."
+        )
+    if message.startswith("unknown device selector: "):
+        selector = message.split(": ", 1)[1]
+        return (
+            f"Unknown device selector: {selector}.\n"
+            "Use a known device_id, nickname, or address from `h59 device list`.\n"
+            "Use `h59 device discover` first if the device has not been registered yet."
+        )
     if message == "No H59-like device found during scan":
         return (
             "No H59 device was discovered.\n"
@@ -54,9 +73,15 @@ def format_operational_error(exc: Exception) -> str | None:
             "Check that Bluetooth is enabled and that this process has Bluetooth permission.\n"
             "If the bracelet is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
         )
+    if BleakDeviceNotFoundError is not None and isinstance(exc, BleakDeviceNotFoundError):
+        return (
+            "The requested device address could not be reached over Bluetooth.\n"
+            "Check that the device is nearby and advertising, or register it first with `h59 device discover`."
+        )
     if isinstance(exc, BleakError) and (
         "Bluetooth is unsupported" in message
         or ("Bluetooth" in message and "not available" in message.lower())
+        or "device with address" in message.lower()
         or "timed out" in message.lower()
         or "timeout" in message.lower()
         or "unsupported" in message.lower()
@@ -213,7 +238,7 @@ def build_sync_child_command(args: argparse.Namespace) -> list[str]:
     cmd = [sys.executable, "-m", "h59_client.cli", "sync", "--daemon-child"]
     if args.selector:
         cmd.append(args.selector)
-    cmd.extend(["--db", args.db, "--name", args.name, "--scan-timeout", str(args.scan_timeout)])
+    cmd.extend(["--db", args.db, "--scan-timeout", str(args.scan_timeout)])
     cmd.extend(["--period", str(args.period_seconds)])
     if args.incremental:
         cmd.append("--incremental")
@@ -259,7 +284,6 @@ def spawn_daemon(args: argparse.Namespace) -> int:
             "pid": proc.pid,
             "db": args.db,
             "selector": args.selector,
-            "name": args.name,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
             "log_file": str(log_file),
@@ -289,7 +313,7 @@ def run_foreground_sync(args: argparse.Namespace) -> int:
         sync_h59(
             db_path=args.db,
             selector=args.selector,
-            name=args.name,
+            name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
             incremental=args.incremental,
             capture_capabilities=not args.skip_capabilities,
@@ -326,7 +350,6 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
             "pid": os.getpid(),
             "db": args.db,
             "selector": args.selector,
-            "name": args.name,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
             "log_file": str(log_file),
@@ -351,7 +374,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                 sync_h59(
                     db_path=args.db,
                     selector=args.selector,
-                    name=args.name,
+                    name=DEFAULT_DISCOVERY_NAME,
                     scan_timeout=args.scan_timeout,
                     incremental=args.incremental,
                     capture_capabilities=not args.skip_capabilities,
@@ -401,7 +424,7 @@ def handle_vibrate(args: argparse.Namespace) -> int:
         vibrate_h59(
             db_path=args.db,
             selector=args.selector,
-            name=args.name,
+            name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
             repeat=args.repeat,
             interval=args.interval,
@@ -420,7 +443,7 @@ def handle_device_info(args: argparse.Namespace) -> int:
         fetch_device_info_h59(
             db_path=args.db,
             selector=args.selector,
-            name=args.name,
+            name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
         )
     )
@@ -433,7 +456,7 @@ def handle_device_capabilities(args: argparse.Namespace) -> int:
         fetch_capabilities_h59(
             db_path=args.db,
             selector=args.selector,
-            name=args.name,
+            name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
         )
     )
@@ -450,7 +473,7 @@ def handle_device_reboot(args: argparse.Namespace) -> int:
         reboot_h59(
             db_path=args.db,
             selector=args.selector,
-            name=args.name,
+            name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
         )
     )
@@ -521,6 +544,41 @@ def handle_device_nickname_set(args: argparse.Namespace) -> int:
             nickname=row["nickname"] or "",
         )
     )
+    return 0
+
+
+def _resolve_report_device_id(db_path: str, selector: str | None) -> int | None:
+    database = H59Database(db_path)
+    try:
+        if selector:
+            row = database.get_device_by_selector(selector)
+            if row is None:
+                raise ValueError(f"unknown device selector: {selector}")
+            return int(row["device_id"])
+        row = database.get_preferred_device()
+        if row is None:
+            raise ValueError("database does not contain any device")
+        return int(row["device_id"])
+    finally:
+        database.close()
+
+
+def handle_report(args: argparse.Namespace) -> int:
+    device_id = _resolve_report_device_id(args.db, args.selector)
+    markdown = render_health_dashboard_report(
+        args.db,
+        report_date=args.date,
+        device_id=device_id,
+    )
+    if args.output:
+        output_path = Path(args.output).expanduser()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown + "\n", encoding="utf-8")
+        print(f"Wrote report to {output_path}")
+    else:
+        sys.stdout.write(markdown)
+        if not markdown.endswith("\n"):
+            sys.stdout.write("\n")
     return 0
 
 
@@ -612,7 +670,6 @@ def add_target_arguments(parser: argparse.ArgumentParser, *, selector_required: 
         help="device selector: device_id, nickname, or address",
     )
     add_db_argument(parser)
-    parser.add_argument("--name", default="H59", help="preferred advertised device name for discovery")
     parser.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
 
 
@@ -642,7 +699,7 @@ def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="h59", description="Local-first H59 sync and daemon CLI")
+    parser = argparse.ArgumentParser(prog="h59", description="Local-first H59 sync, reporting, and daemon CLI")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -657,12 +714,23 @@ def build_parser() -> argparse.ArgumentParser:
     vibrate_parser.add_argument("--interval", type=float, default=0.75, help="seconds between repeated vibration commands")
     vibrate_parser.set_defaults(handler=handle_vibrate)
 
+    report_parser = subparsers.add_parser("report", help="render a markdown health data report from the local database")
+    report_parser.add_argument(
+        "selector",
+        nargs="?",
+        help="device selector: device_id, nickname, or address",
+    )
+    add_db_argument(report_parser)
+    report_parser.add_argument("--date", help="report day in YYYY-MM-DD format; defaults to the latest day found in the database")
+    report_parser.add_argument("--output", help="write the markdown report to this file instead of stdout")
+    report_parser.set_defaults(handler=handle_report)
+
     device_parser = subparsers.add_parser("device", help="device discovery, registry, and one-shot control commands")
     device_subparsers = device_parser.add_subparsers(dest="device_command", required=True)
 
     device_discover = device_subparsers.add_parser("discover", help="scan nearby H59 devices and register them in the database")
     add_db_argument(device_discover)
-    device_discover.add_argument("--name", default="H59", help="preferred advertised device name for discovery")
+    device_discover.add_argument("--name", default=DEFAULT_DISCOVERY_NAME, help="preferred advertised device name for discovery")
     device_discover.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
     device_discover.set_defaults(handler=handle_device_discover)
 

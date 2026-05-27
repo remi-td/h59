@@ -380,6 +380,37 @@ class H59Database:
         ).fetchall()
         return list(rows)
 
+    def get_preferred_device(self, *, name: str | None = None) -> sqlite3.Row | None:
+        if name and name != "H59":
+            row = self.connection.execute(
+                """
+                SELECT *
+                FROM devices
+                WHERE name=?
+                ORDER BY
+                    CASE WHEN last_seen_at IS NULL THEN 1 ELSE 0 END,
+                    last_seen_at DESC,
+                    device_id ASC
+                LIMIT 1
+                """,
+                (name,),
+            ).fetchone()
+            if row is not None:
+                return row
+            return None
+
+        return self.connection.execute(
+            """
+            SELECT *
+            FROM devices
+            ORDER BY
+                CASE WHEN last_seen_at IS NULL THEN 1 ELSE 0 END,
+                last_seen_at DESC,
+                device_id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+
     def set_device_nickname(self, selector: str, nickname: str | None) -> sqlite3.Row:
         row = self.get_device_by_selector(selector)
         if row is None:

@@ -90,11 +90,10 @@ def test_build_parser_supports_device_info_command():
 
 def test_build_parser_supports_device_capabilities_command():
     parser = build_parser()
-    args = parser.parse_args(["device", "capabilities", "bracelet", "--name", "H59_TEST"])
+    args = parser.parse_args(["device", "capabilities", "bracelet"])
     assert args.command == "device"
     assert args.device_command == "capabilities"
     assert args.selector == "bracelet"
-    assert args.name == "H59_TEST"
 
 
 def test_build_parser_supports_device_vibrate_command():
@@ -141,6 +140,16 @@ def test_build_parser_supports_db_reset_command():
     assert args.db == "data/test.sqlite"
 
 
+def test_build_parser_supports_report_command():
+    parser = build_parser()
+    args = parser.parse_args(["report", "left-wrist", "--db", "data/test.sqlite", "--date", "2026-05-27", "--output", "report.md"])
+    assert args.command == "report"
+    assert args.selector == "left-wrist"
+    assert args.db == "data/test.sqlite"
+    assert args.date == "2026-05-27"
+    assert args.output == "report.md"
+
+
 def test_archive_db_path_formats_expected_name(tmp_path):
     db_path = tmp_path / "h59.sqlite"
     archived = archive_db_path(db_path, now=datetime(2026, 5, 27, 10, 11, 12, tzinfo=UTC))
@@ -152,6 +161,20 @@ def test_format_operational_error_for_missing_device_scan():
     assert message is not None
     assert "No H59 device was discovered." in message
     assert "disconnect or unpair it temporarily" in message
+
+
+def test_format_operational_error_for_missing_registered_devices():
+    message = format_operational_error(ValueError("database does not contain any device"))
+    assert message is not None
+    assert "No devices are registered in the local database." in message
+    assert "`h59 device discover`" in message
+
+
+def test_format_operational_error_for_unknown_device_selector():
+    message = format_operational_error(ValueError("unknown device selector: wristband"))
+    assert message is not None
+    assert "Unknown device selector: wristband." in message
+    assert "`h59 device list`" in message
 
 
 def test_format_operational_error_for_bluetooth_unavailable():

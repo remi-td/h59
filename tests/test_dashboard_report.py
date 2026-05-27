@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
-from h59_client.dashboard_report import render_health_dashboard_report
-from h59_client.protocol import ActivityBlock, BatteryStatus, HeartRateDay
+from h59_client.report import render_health_dashboard_report
+from h59_client.protocol import ActivityBlock, BatteryStatus, BloodOxygenHistory, BloodOxygenSample, HeartRateDay, HrvHistory, PressureHistory
 from h59_client.storage import H59Database
 
 
@@ -57,6 +57,36 @@ def test_render_dashboard_report_surfaces_available_and_missing_metrics(tmp_path
         ),
         raw_packet_hex="15...",
     )
+    db.record_blood_oxygen_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=BloodOxygenHistory(
+            unknown_flag=1,
+            samples=[
+                BloodOxygenSample(min_percent=97, max_percent=99),
+                BloodOxygenSample(min_percent=98, max_percent=99),
+            ],
+        ),
+        raw_packet_hex="bc2a...",
+        source_command=42,
+    )
+    db.record_pressure_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=PressureHistory(values=[43, 41, 0], range_minutes=30),
+        raw_packet_hex="37...",
+        source_command=55,
+    )
+    db.record_hrv_history(
+        device_id,
+        sync_id,
+        target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC),
+        history=HrvHistory(values=[47, 44, 0], range_minutes=30),
+        raw_packet_hex="39...",
+        source_command=57,
+    )
     db.finish_sync(sync_id, finished_at="2026-05-26T15:00:03+00:00")
 
     markdown = render_health_dashboard_report(tmp_path / "h59.sqlite", report_date="2026-05-26")
@@ -65,8 +95,12 @@ def test_render_dashboard_report_surfaces_available_and_missing_metrics(tmp_path
     assert "| Steps | Available | Partial: Daily totals and hourly buckets from 15-minute activity bins |" in markdown
     assert "| Heart rate | Available | Available: Latest/min/max/avg from historical 5-minute samples |" in markdown
     assert "| Sleep | Missing | Missing: No decoded sleep sessions in current database |" in markdown
-    assert "Device advertises support, but no samples are stored" in markdown
-    assert "No raw accelerometer history is stored." in markdown
+    assert "### Blood Oxygen / SpO2" in markdown
+    assert "- Historical samples: `2` total, `2` on selected day" in markdown
+    assert "### HRV" in markdown
+    assert "### Stress / Pressure-like" in markdown
+    assert "### Blood Pressure" in markdown
+    assert "- Not available in the current database." in markdown
     assert "These sessions are inferred from contiguous 15-minute activity bins" in markdown
 
     db.close()
