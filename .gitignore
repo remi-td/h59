@@ -12,3 +12,4 @@ traces/
 misc/
 ring_data.sqlite
 *.sqlite
+report.md
