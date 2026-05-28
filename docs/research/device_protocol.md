@@ -137,6 +137,18 @@ Assessment:
 - proven available
 - sample decoding needs refinement to 16-bit values
 
+## Observed Retention
+
+Live backfill behavior on 2026-05-28:
+- a fresh initial backfill successfully queried a 7-day window
+- the device returned stored history back to `2026-05-24`
+- `2026-05-24` matches the start of actual use for the tested bracelet
+
+Assessment:
+- this is consistent with roughly 7 days of on-device history retention
+- the exact retention ceiling is still inferred rather than directly proven
+- fresh pulls reproduced the same missing intervals, so those gaps were present in the device's accessible history at sync time
+
 ## Capability Flags
 
 The set-time response advertises support for:

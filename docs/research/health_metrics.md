@@ -3,6 +3,7 @@
 Date:
 - 2026-05-26
 - updated 2026-05-27 with live selector probing for pressure and HRV history
+- updated 2026-05-28 with fresh retention and gap-recovery checks
 
 ## Goal
 
@@ -22,6 +23,7 @@ What is now proven:
 - historical HRV data is available
 - older-than-today pressure history is available
 - older-than-today HRV history is available
+- a fresh 7-day backfill query recovered all available history back to the device's first-use date
 
 What remains unresolved:
 - historical blood pressure
@@ -95,6 +97,25 @@ Assessment:
 - blood pressure support is still unresolved
 - a different historical path likely exists, but it is not proven yet
 
+### History Retention and Gap Recovery
+
+Result:
+- on 2026-05-28, a fresh initial backfill queried 7 days and recovered history back to `2026-05-24`
+- that date matches the start of actual device use, so the result is consistent with the bracelet retaining about 7 days of full history
+- this does not directly prove a hard 7-day retention ceiling yet; it shows that a 7-day query works and that all stored days since first use were returned
+- fresh one-day and fresh backfill syncs reproduced the same heart-rate and activity gaps in new databases
+- those gaps therefore were present in the bracelet's accessible history at sync time
+
+Examples:
+- heart-rate gaps on `2026-05-27` included `18:25 -> 19:10 UTC` and `19:10 -> 20:30 UTC`
+- heart-rate gaps on `2026-05-28` included `08:45 -> 10:50 UTC` and `12:40 -> 14:45 UTC`
+- the same gaps were observed after a fresh backfill into a new database, so they were not caused by local overwrite behavior
+
+Assessment:
+- the bracelet appears to keep about 7 days of accessible history, though that remains an inference until older real usage data exists
+- historical reads appear non-destructive
+- currently missing intervals cannot be recovered if the bracelet itself no longer returns them during a fresh pull
+
 ## Practical Conclusion
 
 The missing pressure and HRV history were not mainly a “not enough history” problem.
@@ -115,6 +136,10 @@ It did not query:
 It also used the wrong request shape for pressure and HRV history:
 - it always sent selector `0`
 - it never iterated older selectors even though the bracelet exposes different historical datasets on selectors `1`, `2`, and `3`
+
+The later retention check adds two important conclusions:
+- the bracelet can answer a 7-day history query and returned all stored history back to first use
+- the remaining gaps seen in fresh databases are device-side history gaps, not artifacts introduced by the local sync process
 
 ## Next Implementation Steps
 
