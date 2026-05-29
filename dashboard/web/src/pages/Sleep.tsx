@@ -16,7 +16,7 @@ function sameNightKey(session: SleepSessionSummary): string | null {
 }
 
 export function Sleep({ device }: { device: string }) {
-  const { data, error, loading } = useSleep(device, "30d");
+  const { data, error, loading } = useSleep(device, "14d");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,7 +31,7 @@ export function Sleep({ device }: { device: string }) {
     const last = data?.sessions[0];
     return (last?.end_timestamp || last?.start_timestamp || null)?.slice(0, 10) ?? null;
   }, [data]);
-  const slots = useMemo(() => rollingDaySlots(endDate, 30), [endDate]);
+  const slots = useMemo(() => rollingDaySlots(endDate, 14), [endDate]);
   const option = useMemo(() => sleepStageTrendOption(data?.sessions || [], slots), [data, slots]);
 
   const selectedSession =
@@ -64,12 +64,12 @@ export function Sleep({ device }: { device: string }) {
 
   return (
     <div className="stack-layout">
-      <TrendEChart
-        title="Sleep Duration by Night"
-        note="Rolling 30 nights · stacked by stage"
-        summary={latestSleepSummary(data?.sessions || [])}
-        option={option}
-        emptyMessage="No sleep history"
+        <TrendEChart
+          title="Sleep Duration by Night"
+          note="Rolling 14 nights · stacked by stage"
+          summary={latestSleepSummary(data?.sessions || [])}
+          option={option}
+          emptyMessage="No sleep history"
         onEvents={onSleepChartClick}
       />
       <SleepTimeline

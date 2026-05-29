@@ -70,6 +70,7 @@ export default function App() {
           subtitle={health ? `${health.device_count} registered device${health.device_count === 1 ? "" : "s"} · ${health.db_path}` : "Connecting to local API"}
           reportDate={reportDate}
           lastSync={selectedDevice?.last_sync ?? null}
+          timeContext={health?.time_context ?? null}
           devices={devices}
           device={device}
           onDeviceChange={setDevice}

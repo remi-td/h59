@@ -1,4 +1,4 @@
-import type { DeviceSummary } from "../api/types";
+import type { DeviceSummary, TimeContext } from "../api/types";
 import { DataQualityBadge } from "./DataQualityBadge";
 import { formatDateTime } from "../lib/format";
 
@@ -7,6 +7,7 @@ export function PageHeader({
   subtitle,
   reportDate,
   lastSync,
+  timeContext,
   devices,
   device,
   onDeviceChange,
@@ -15,6 +16,7 @@ export function PageHeader({
   subtitle?: string;
   reportDate?: string | null;
   lastSync?: string | null;
+  timeContext?: TimeContext | null;
   devices: DeviceSummary[];
   device: string;
   onDeviceChange: (value: string) => void;
@@ -28,7 +30,7 @@ export function PageHeader({
           {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
           {reportDate ? (
             <p className="page-sync-meta">
-              <span className="page-sync-label">Report date</span>
+              <span className="page-sync-label">UTC day</span>
               <span>{reportDate}</span>
             </p>
           ) : null}
@@ -36,6 +38,12 @@ export function PageHeader({
             <span className="page-sync-label">Last sync</span>
             <span>{lastSync ? formatDateTime(lastSync) : "No sync recorded yet"}</span>
           </p>
+          {timeContext ? (
+            <p className="page-sync-meta">
+              <span className="page-sync-label">Time policy</span>
+              <span>Display: browser local · Storage: {timeContext.storage_timezone} · Day boundary: {timeContext.query_day_boundary_timezone}</span>
+            </p>
+          ) : null}
         </div>
       </div>
       <div className="page-header-controls">

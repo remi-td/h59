@@ -6,7 +6,7 @@ from datetime import UTC
 from ..db import utc_now
 from ..schemas import MetricBreakdownItem, MetricCard, MetricSummary, TodayResponse
 from ..time import utc_day_bounds
-from .common import ResolvedDevice, device_summary_payload, fmt_minutes, sparkline_point, summary
+from .common import ResolvedDevice, device_summary_payload, fmt_minutes, sparkline_point, summary, time_context
 
 
 def today_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_preferred: bool) -> TodayResponse:
@@ -36,7 +36,7 @@ def today_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_pref
     latest_sleep = conn.execute(
         """
         SELECT *
-        FROM sleep_sessions
+        FROM analytic_sleep_sessions_canonical
         WHERE device_id=? AND end_timestamp>=? AND end_timestamp<?
         ORDER BY end_timestamp DESC
         LIMIT 1
@@ -250,6 +250,7 @@ def today_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_pref
 
     return TodayResponse(
         date=report_date,
+        time_context=time_context(),
         device=device_summary_payload(resolved, is_preferred=is_preferred),
         cards=cards,
     )

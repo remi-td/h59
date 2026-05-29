@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from ..schemas import DebugResponse
-from .common import ResolvedDevice, device_summary_payload
+from .common import ResolvedDevice, device_summary_payload, time_context
 
 
 def debug_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_preferred: bool) -> DebugResponse:
@@ -44,4 +44,5 @@ def debug_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_pref
         device=device_summary_payload(resolved, is_preferred=is_preferred),
         table_counts=table_counts,
         recent_syncs=recent_syncs,
+        time_context=time_context(),
     )

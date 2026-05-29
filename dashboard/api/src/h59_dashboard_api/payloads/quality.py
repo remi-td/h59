@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from ..schemas import DataQualityResponse
 from ..time import utc_day_from_iso
-from .common import ResolvedDevice, latest_metric_day
+from .common import ResolvedDevice, latest_metric_day, time_context
 from .device_status import device_status_payload
 
 
@@ -41,4 +41,5 @@ def data_quality_payload(conn: sqlite3.Connection, resolved: ResolvedDevice) -> 
         latest_sample_timestamps=latest_samples,
         sleep_record_present=sleep_present,
         missing_metrics=missing,
+        time_context=time_context(),
     )

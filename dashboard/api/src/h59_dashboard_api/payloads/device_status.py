@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from ..schemas import DeviceStatusResponse
-from .common import ResolvedDevice, device_summary_payload
+from .common import ResolvedDevice, device_summary_payload, time_context
 
 
 def device_status_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_preferred: bool) -> DeviceStatusResponse:
@@ -25,4 +25,5 @@ def device_status_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *,
         battery_charging=resolved.battery_charging,
         last_sample_timestamp=last_sample,
         latest_samples=latest_samples,
+        time_context=time_context(),
     )

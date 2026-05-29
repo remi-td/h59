@@ -73,7 +73,7 @@ Run the API:
 
 ```bash
 cd dashboard/api
-PYTHONPATH=src python -m uvicorn h59_dashboard_api.main:app --host 127.0.0.1 --port 8000 --reload
+PYTHONPATH=src:../../src python -m uvicorn h59_dashboard_api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Run the web app:

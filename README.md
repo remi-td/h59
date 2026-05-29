@@ -119,6 +119,42 @@ Incremental sync behavior:
 - if a device already has sync history in the database, `h59 sync -i` resumes from the latest recorded sync day
 - if the device has no prior sync history, `h59 sync -i` performs an initial backfill and probes backward until the device stops returning daily history, within a bounded search window
 
+## Dashboard services
+
+This project provides a REST API and dashboard services to easily access the analytical data. These services are not installed through the CLI package. 
+They live under `dashboard/` and is run from the source checkout.
+
+Clone the repo first, then use the runner:
+
+```bash
+git clone https://github.com/remi-td/h59.git
+cd h59/dashboard
+./run.sh start
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+The runner will:
+- create and update `dashboard/api/.venv`
+- install frontend dependencies under `dashboard/web/`
+- start the API on `http://127.0.0.1:8000`
+- start the web app on `http://127.0.0.1:5173`
+
+Useful service commands:
+
+```bash
+cd dashboard
+./run.sh status
+./run.sh logs api
+./run.sh logs web
+./run.sh restart
+./run.sh stop
+```
+
 ## Approach
 
 The software follows a local-first pipeline:
@@ -182,4 +218,17 @@ Run tests with:
 
 ```bash
 uv run pytest
+```
+
+Run the dashboard manually without the runner:
+
+```bash
+cd dashboard/api
+PYTHONPATH=src:../../src python -m uvicorn h59_dashboard_api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+```bash
+cd dashboard/web
+npm install
+npm run dev
 ```

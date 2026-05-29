@@ -13,6 +13,16 @@ from typing import Any
 
 
 ANALYTIC_VIEWS_SQL = """
+DROP VIEW IF EXISTS analytic_heart_rate_intervals;
+DROP VIEW IF EXISTS analytic_activity_intervals;
+DROP VIEW IF EXISTS analytic_sleep_stage_intervals;
+DROP VIEW IF EXISTS analytic_blood_oxygen_intervals;
+DROP VIEW IF EXISTS analytic_pressure_intervals;
+DROP VIEW IF EXISTS analytic_hrv_intervals;
+DROP VIEW IF EXISTS analytic_daily_steps;
+DROP VIEW IF EXISTS analytic_daily_sleep;
+DROP VIEW IF EXISTS analytic_sleep_sessions_canonical;
+
 CREATE VIEW IF NOT EXISTS analytic_heart_rate_intervals AS
 SELECT
     hr.heart_rate_id AS source_id,
@@ -68,6 +78,57 @@ SELECT
     sss.is_provisional,
     sss.raw_json
 FROM sleep_stage_samples AS sss;
+
+CREATE VIEW IF NOT EXISTS analytic_sleep_sessions_canonical AS
+WITH sleep_quality AS (
+    SELECT
+        ss.sleep_session_id,
+        ss.device_id,
+        ss.sync_id,
+        ss.start_timestamp,
+        ss.end_timestamp,
+        ss.total_minutes,
+        ss.state,
+        ss.score,
+        ss.is_provisional,
+        ss.source_command,
+        ss.raw_json,
+        date(COALESCE(ss.end_timestamp, ss.start_timestamp)) AS sleep_day,
+        COALESCE(SUM(CASE WHEN sss.stage = 'no-data' THEN sss.minutes ELSE 0 END), 0) AS no_data_minutes
+    FROM sleep_sessions AS ss
+    LEFT JOIN sleep_stage_samples AS sss
+      ON sss.sleep_session_id = ss.sleep_session_id
+    GROUP BY ss.sleep_session_id
+),
+ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY device_id, sleep_day
+            ORDER BY
+                no_data_minutes ASC,
+                end_timestamp DESC,
+                total_minutes DESC,
+                sleep_session_id DESC
+        ) AS session_rank
+    FROM sleep_quality
+)
+SELECT
+    sleep_session_id,
+    device_id,
+    sync_id,
+    start_timestamp,
+    end_timestamp,
+    total_minutes,
+    state,
+    score,
+    is_provisional,
+    source_command,
+    raw_json,
+    sleep_day,
+    no_data_minutes
+FROM ranked
+WHERE session_rank = 1;
 
 CREATE VIEW IF NOT EXISTS analytic_blood_oxygen_intervals AS
 SELECT
@@ -127,13 +188,13 @@ GROUP BY device_id, date(timestamp);
 CREATE VIEW IF NOT EXISTS analytic_daily_sleep AS
 SELECT
     device_id,
-    date(COALESCE(end_timestamp, start_timestamp)) AS sleep_day,
-    strftime('%Y-%m-%dT00:00:00+00:00', COALESCE(end_timestamp, start_timestamp)) AS valid_from,
-    strftime('%Y-%m-%dT00:00:00+00:00', unixepoch(COALESCE(end_timestamp, start_timestamp)) + (24 * 60 * 60), 'unixepoch') AS valid_to,
+    sleep_day,
+    strftime('%Y-%m-%dT00:00:00+00:00', end_timestamp) AS valid_from,
+    strftime('%Y-%m-%dT00:00:00+00:00', unixepoch(end_timestamp) + (24 * 60 * 60), 'unixepoch') AS valid_to,
     SUM(total_minutes) AS minutes_total,
     COUNT(*) AS session_count
-FROM sleep_sessions
-GROUP BY device_id, date(COALESCE(end_timestamp, start_timestamp));
+FROM analytic_sleep_sessions_canonical
+GROUP BY device_id, sleep_day;
 """
 
 

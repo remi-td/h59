@@ -8,7 +8,7 @@ from statistics import mean
 from h59_client.analytics import ensure_analytic_views
 
 from ..db import utc_now
-from ..schemas import DeviceSummary, FreshnessClass, MetricPoint, MetricSummary
+from ..schemas import DeviceSummary, FreshnessClass, MetricPoint, MetricSummary, TimeContext
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,32 @@ class ResolvedDevice:
     freshness: FreshnessClass
 
 
+REQUIRED_ANALYTIC_VIEWS = {
+    "analytic_heart_rate_intervals",
+    "analytic_activity_intervals",
+    "analytic_sleep_stage_intervals",
+    "analytic_sleep_sessions_canonical",
+    "analytic_blood_oxygen_intervals",
+    "analytic_pressure_intervals",
+    "analytic_hrv_intervals",
+    "analytic_daily_steps",
+    "analytic_daily_sleep",
+}
+
+
 def ensure_analytic_surface(conn: sqlite3.Connection) -> None:
+    existing = {
+        str(row["name"])
+        for row in conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type='view' AND name LIKE 'analytic_%'
+            """
+        ).fetchall()
+    }
+    if REQUIRED_ANALYTIC_VIEWS.issubset(existing):
+        return
     ensure_analytic_views(conn)
 
 
@@ -166,3 +191,7 @@ def daily_bucket_timestamps(end_date: date, days: int = 7) -> list[str]:
         datetime.combine(start_date + timedelta(days=offset), datetime.min.time(), tzinfo=UTC).isoformat()
         for offset in range(days)
     ]
+
+
+def time_context() -> TimeContext:
+    return TimeContext()

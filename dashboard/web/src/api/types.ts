@@ -2,6 +2,13 @@ export type FreshnessClass = "fresh" | "partial" | "stale" | "empty" | "error";
 export type TrustClass = "measured" | "derived" | "estimated" | "vendor_score" | "unknown";
 export type TrendType = "line" | "boxplot" | "none";
 
+export interface TimeContext {
+  storage_timezone: "UTC";
+  display_timezone: "browser-local";
+  query_day_boundary_timezone: "UTC";
+  interval_model: "[from, to[";
+}
+
 export interface DeviceSummary {
   id: number;
   nickname?: string | null;
@@ -42,6 +49,7 @@ export interface MetricCardData {
 
 export interface TodayResponse {
   date: string;
+  time_context: TimeContext;
   device: DeviceSummary;
   cards: MetricCardData[];
 }
@@ -68,6 +76,7 @@ export interface MetricSeriesResponse {
   latest_value?: number | null;
   summary?: MetricSummary | null;
   note?: string | null;
+  time_context: TimeContext;
 }
 
 export interface SleepStageSegment {
@@ -94,6 +103,7 @@ export interface SleepResponse {
   sessions: SleepSessionSummary[];
   latest_session?: SleepSessionSummary | null;
   daily_totals: MetricPoint[];
+  time_context: TimeContext;
 }
 
 export interface DeviceStatusResponse {
@@ -101,6 +111,7 @@ export interface DeviceStatusResponse {
   battery_charging?: boolean | null;
   last_sample_timestamp?: string | null;
   latest_samples: Record<string, string | null>;
+  time_context: TimeContext;
 }
 
 export interface DataQualityResponse {
@@ -111,16 +122,19 @@ export interface DataQualityResponse {
   latest_sample_timestamps: Record<string, string | null>;
   sleep_record_present: boolean;
   missing_metrics: string[];
+  time_context: TimeContext;
 }
 
 export interface DebugResponse {
   device: DeviceSummary;
   table_counts: Record<string, number>;
   recent_syncs: Array<Record<string, string | number | null>>;
+  time_context: TimeContext;
 }
 
 export interface HealthResponse {
   status: "ok" | "missing_database" | "empty_database";
   db_path: string;
   device_count: number;
+  time_context: TimeContext;
 }

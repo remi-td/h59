@@ -5,7 +5,7 @@ from typing import Any
 
 from ..schemas import MetricPoint, MetricSeriesResponse
 from ..time import range_start
-from .common import quantile, summary
+from .common import quantile, summary, time_context
 
 
 def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str, range_name: str) -> MetricSeriesResponse:
@@ -48,6 +48,7 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
             points=points,
             latest_value=points[-1].median_value if points else None,
             summary=summary([float(v) for v in flat_values]) if flat_values else None,
+            time_context=time_context(),
         )
 
     if metric == "blood-pressure":
@@ -59,6 +60,7 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
             range=range_name,
             available=False,
             note="Historical blood-pressure extraction is not currently proven for this device.",
+            time_context=time_context(),
         )
 
     configs: dict[str, dict[str, Any]] = {
@@ -128,4 +130,5 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
         points=points,
         latest_value=values[-1] if values else None,
         summary=summary([float(v) for v in values]) if values else None,
+        time_context=time_context(),
     )

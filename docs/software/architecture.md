@@ -442,6 +442,8 @@ The current codebase now reflects these architectural decisions:
 - the dashboard frontend uses reusable data hooks instead of route-by-route request orchestration
 - page-level visualizations are standardized on one charting framework
 - raw tables and analytic projections are separated conceptually within the shared SQLite backend
+- API responses expose explicit time-context metadata
+- the dashboard header makes the current display/storage/day-boundary time policy visible
 
 ## Non-Goals
 

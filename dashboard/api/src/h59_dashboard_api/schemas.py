@@ -10,6 +10,13 @@ FreshnessClass = Literal["fresh", "partial", "stale", "empty", "error"]
 TrendType = Literal["line", "boxplot", "none"]
 
 
+class TimeContext(BaseModel):
+    storage_timezone: Literal["UTC"] = "UTC"
+    display_timezone: Literal["browser-local"] = "browser-local"
+    query_day_boundary_timezone: Literal["UTC"] = "UTC"
+    interval_model: Literal["[from, to["] = "[from, to["
+
+
 class DeviceSummary(BaseModel):
     id: int
     nickname: str | None = None
@@ -61,6 +68,7 @@ class MetricCard(BaseModel):
 
 class TodayResponse(BaseModel):
     date: str
+    time_context: TimeContext
     device: DeviceSummary
     cards: list[MetricCard]
 
@@ -69,6 +77,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "missing_database", "empty_database"]
     db_path: str
     device_count: int
+    time_context: TimeContext
 
 
 class MetricSeriesResponse(BaseModel):
@@ -82,6 +91,7 @@ class MetricSeriesResponse(BaseModel):
     latest_value: float | int | None = None
     summary: MetricSummary | None = None
     note: str | None = None
+    time_context: TimeContext
 
 
 class SleepStageSegment(BaseModel):
@@ -108,6 +118,7 @@ class SleepResponse(BaseModel):
     sessions: list[SleepSessionSummary] = Field(default_factory=list)
     latest_session: SleepSessionSummary | None = None
     daily_totals: list[MetricPoint] = Field(default_factory=list)
+    time_context: TimeContext
 
 
 class DeviceStatusResponse(BaseModel):
@@ -115,6 +126,7 @@ class DeviceStatusResponse(BaseModel):
     battery_charging: bool | None = None
     last_sample_timestamp: str | None = None
     latest_samples: dict[str, str | None]
+    time_context: TimeContext
 
 
 class DataQualityResponse(BaseModel):
@@ -125,9 +137,11 @@ class DataQualityResponse(BaseModel):
     latest_sample_timestamps: dict[str, str | None]
     sleep_record_present: bool
     missing_metrics: list[str]
+    time_context: TimeContext
 
 
 class DebugResponse(BaseModel):
     device: DeviceSummary
     table_counts: dict[str, int]
     recent_syncs: list[dict[str, str | int | None]]
+    time_context: TimeContext

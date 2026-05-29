@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "dashboard" / "api" / "src"))
 
+import h59_dashboard_api.payloads.today as today_payload_module  # noqa: E402
 from h59_dashboard_api.config import Settings  # noqa: E402
 from h59_dashboard_api.main import create_app  # noqa: E402
 from h59_client.protocol import BatteryStatus  # noqa: E402
@@ -93,10 +94,13 @@ def test_dashboard_api_today_and_health(tmp_path: Path) -> None:
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["status"] == "ok"
+    assert health.json()["time_context"]["storage_timezone"] == "UTC"
+    assert health.json()["time_context"]["display_timezone"] == "browser-local"
 
     today = client.get("/api/today")
     assert today.status_code == 200
     payload = today.json()
+    assert payload["time_context"]["query_day_boundary_timezone"] == "UTC"
     assert payload["device"]["battery_percent"] == 82
     card_ids = {card["id"] for card in payload["cards"]}
     assert {"steps", "heart_rate", "sleep", "spo2", "hrv", "stress"}.issubset(card_ids)
@@ -159,3 +163,44 @@ def test_dashboard_api_today_does_not_fall_back_to_prior_activity_day(tmp_path: 
     assert steps_card["value"] is None
     assert steps_card["status"] == "empty"
     assert steps_card["subtitle"] == "No activity summaries"
+
+
+def test_dashboard_api_today_uses_utc_day_boundaries(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        device_id = int(db.connection.execute("SELECT device_id FROM devices LIMIT 1").fetchone()[0])
+        sync_id = int(db.connection.execute("SELECT MIN(sync_id) FROM syncs").fetchone()[0])
+        db.connection.execute("DELETE FROM heart_rates")
+        db.connection.executemany(
+            "INSERT INTO heart_rates(reading, timestamp, device_id, sync_id, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, 21, '')",
+            [
+                (61, "2026-05-28T23:55:00+00:00", device_id, sync_id),
+                (72, "2026-05-29T00:05:00+00:00", device_id, sync_id),
+            ],
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(today_payload_module, "utc_now", lambda: datetime(2026, 5, 29, 12, 0, tzinfo=UTC))
+
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=False,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    today = client.get("/api/today")
+    assert today.status_code == 200
+    payload = today.json()
+    heart_card = next(card for card in payload["cards"] if card["id"] == "heart_rate")
+    assert heart_card["value"] == 72
+    assert len(heart_card["sparkline"]) == 1
+    assert heart_card["sparkline"][0]["timestamp"] == "2026-05-29T00:05:00+00:00"

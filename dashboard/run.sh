@@ -3,10 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
 RUN_DIR="$ROOT_DIR/.run"
 ENV_FILE="$ROOT_DIR/.env"
 API_DIR="$ROOT_DIR/api"
 WEB_DIR="$ROOT_DIR/web"
+PROJECT_SRC_DIR="$PROJECT_ROOT/src"
 API_VENV_DIR="$API_DIR/.venv"
 API_ENV_STAMP="$RUN_DIR/api-env.stamp"
 WEB_DEPS_STAMP="$WEB_DIR/node_modules/.package-lock.json"
@@ -149,7 +151,7 @@ start_api() {
   echo "  python: $api_python"
   (
     cd "$ROOT_DIR"
-    pid="$(spawn_detached "$(api_log_file)" env VIRTUAL_ENV="$API_VENV_DIR" PATH="$API_VENV_DIR/bin:$PATH" PYTHONPATH="$API_DIR/src" H59_DB_PATH="${H59_DB_PATH:-../data/h59.sqlite}" "$api_python" "${uvicorn_args[@]}")"
+    pid="$(spawn_detached "$(api_log_file)" env VIRTUAL_ENV="$API_VENV_DIR" PATH="$API_VENV_DIR/bin:$PATH" PYTHONPATH="$API_DIR/src:$PROJECT_SRC_DIR${PYTHONPATH:+:$PYTHONPATH}" H59_DB_PATH="${H59_DB_PATH:-$PROJECT_ROOT/data/h59.sqlite}" "$api_python" "${uvicorn_args[@]}")"
     echo "$pid" >"$(api_pid_file)"
   )
   sleep 1

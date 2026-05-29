@@ -26,6 +26,9 @@ The following hardening items are now materially in place:
 - dashboard API device-resolution boilerplate reduced into shared helpers
 - dashboard API payload logic split into domain modules under `dashboard/api/src/h59_dashboard_api/payloads/`
 - dashboard API range filtering moved away from silent `date(timestamp)` semantics toward explicit UTC range predicates in the main product paths
+- dashboard API now exposes explicit time-context metadata in its response contract
+- dashboard UI now displays the current time policy in the header
+- UTC day-boundary behavior is covered by regression tests
 - page-level dashboard charts standardized on Apache ECharts
 - transitional page-level chart components removed
 - frontend data access centralized through reusable hooks
@@ -35,10 +38,8 @@ The following hardening items are now materially in place:
 
 ### 1. Time Semantics
 
-- make the dashboard display-time policy explicit in the UI itself
-  - current state: timestamps are stored in UTC and many displays render in browser-local time
-- expose display-time context consistently through the header or API metadata
 - add regression tests for local-day versus UTC-day behavior in dashboard/API interactions
+  - current state: UTC day-boundary behavior is covered, but local-display edge cases still need broader coverage
 
 ### 2. Analytic Layer Depth
 

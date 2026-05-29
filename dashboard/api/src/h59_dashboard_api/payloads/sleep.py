@@ -4,6 +4,7 @@ import sqlite3
 
 from ..schemas import MetricPoint, SleepResponse, SleepSessionSummary, SleepStageSegment
 from ..time import range_start
+from .common import time_context
 
 
 def sleep_payload(conn: sqlite3.Connection, device_id: int, range_name: str) -> SleepResponse:
@@ -11,9 +12,9 @@ def sleep_payload(conn: sqlite3.Connection, device_id: int, range_name: str) -> 
     rows = conn.execute(
         """
         SELECT *
-        FROM sleep_sessions
-        WHERE device_id=? AND COALESCE(end_timestamp, start_timestamp)>=?
-        ORDER BY COALESCE(end_timestamp, start_timestamp) DESC
+        FROM analytic_sleep_sessions_canonical
+        WHERE device_id=? AND end_timestamp>=?
+        ORDER BY end_timestamp DESC
         """,
         (device_id, start),
     ).fetchall()
@@ -66,4 +67,5 @@ def sleep_payload(conn: sqlite3.Connection, device_id: int, range_name: str) -> 
         sessions=sessions,
         latest_session=sessions[0] if sessions else None,
         daily_totals=daily_totals,
+        time_context=time_context(),
     )

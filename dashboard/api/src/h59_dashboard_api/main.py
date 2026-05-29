@@ -49,7 +49,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ensure_analytic_surface(conn)
                 return health_payload(conn, str(settings.db_path))
         except FileNotFoundError:
-            return HealthResponse(status="missing_database", db_path=str(settings.db_path), device_count=0)
+            from .schemas import TimeContext
+            return HealthResponse(status="missing_database", db_path=str(settings.db_path), device_count=0, time_context=TimeContext())
 
     @app.get("/api/devices", response_model=list[DeviceSummary])
     def api_devices() -> list[DeviceSummary]:
