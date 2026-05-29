@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: H59 SQLite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      path: /h59-data/h59.sqlite

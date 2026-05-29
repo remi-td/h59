@@ -13,3 +13,5 @@ misc/
 ring_data.sqlite
 *.sqlite
 report.md
+dashboard/grafana-data/
+dashboard/.env

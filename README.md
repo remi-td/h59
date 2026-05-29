@@ -20,6 +20,9 @@ The current CLI can:
 - trigger simple device actions such as vibration and reboot
 - generate markdown reports for a device and validate data completeness
 
+An optional Grafana visualization stack is also provided under:
+- `dashboard/`
+
 ## Install
 
 ### Recommended: install with `uv`
@@ -150,6 +153,10 @@ Device research:
 - [Historical Health Metrics Investigation](/Users/remi.turpaud/Code/h59/docs/research/health_metrics.md:1)
 - [Compatibility Mapping](/Users/remi.turpaud/Code/h59/docs/research/compatibility_mapping.md:1)
 
+Visualization:
+- [Dashboard README](/Users/remi.turpaud/Code/h59/dashboard/README.md:1)
+- [Visualization Layer Architecture](/Users/remi.turpaud/Code/h59/docs/software/visualisation_layer_architecture.md:1)
+
 Contributor guidance:
 - [AGENT.md](/Users/remi.turpaud/Code/h59/AGENT.md:1)
 
@@ -158,6 +165,7 @@ Contributor guidance:
 - `src/h59_client/`: installable CLI package
 - `tests/`: unit tests
 - `tools/`: small project utilities
+- `dashboard/`: optional Grafana provisioning, dashboards, and helper SQL
 - `docs/software/`: user-facing software documentation
 - `docs/research/`: reverse-engineering findings kept separate from CLI docs
 - `data/`: runtime databases and generated outputs, intentionally not tracked
