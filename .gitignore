@@ -15,3 +15,8 @@ ring_data.sqlite
 report.md
 dashboard/grafana-data/
 dashboard/.env
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/web/*.tsbuildinfo
+dashboard/api/.venv/
+dashboard/.run/

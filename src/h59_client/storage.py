@@ -263,6 +263,14 @@ def utc_text(value: str | datetime) -> str:
     return dt.astimezone(UTC).isoformat()
 
 
+def normalize_sleep_stage(stage: str) -> str:
+    # The raw protocol still carries the original stage code in JSON.
+    # Persist the inferred canonical label in the first-class column.
+    if stage.startswith("unknown-"):
+        return "rem"
+    return stage
+
+
 class H59Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -321,6 +329,27 @@ class H59Database:
                OR end_timestamp IS NULL
                OR total_minutes IS NULL
                OR total_minutes <= 0
+            """
+        )
+        # Historical sleep decoding used `unknown-*` stage labels for a stage
+        # we now interpret as REM. Keep the raw JSON intact, but normalize the
+        # first-class stage column for analytics and dashboard use.
+        self.connection.execute(
+            """
+            UPDATE sleep_stage_samples
+            SET stage='rem', is_provisional=1
+            WHERE stage LIKE 'unknown-%'
+            """
+        )
+        self.connection.execute(
+            """
+            UPDATE sleep_sessions
+            SET is_provisional=1
+            WHERE sleep_session_id IN (
+                SELECT DISTINCT sleep_session_id
+                FROM sleep_stage_samples
+                WHERE is_provisional=1
+            )
             """
         )
 
@@ -789,6 +818,7 @@ class H59Database:
                 period_start = stage_start
                 period_end = stage_start + timedelta(minutes=period.minutes)
                 period_json = to_json(period)
+                normalized_stage = normalize_sleep_stage(period.stage)
                 self.connection.execute(
                     """
                     INSERT INTO sleep_stage_samples(
@@ -818,7 +848,7 @@ class H59Database:
                         device_id,
                         sync_id,
                         index,
-                        period.stage,
+                        normalized_stage,
                         utc_text(period_start),
                         utc_text(period_end),
                         period.minutes,

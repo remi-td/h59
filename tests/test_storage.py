@@ -370,6 +370,46 @@ def test_storage_updates_existing_sleep_session_by_bounds(tmp_path):
     db.close()
 
 
+def test_storage_normalizes_unknown_sleep_stage_to_rem(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-27T10:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-27T10:00:00+00:00", source="test")
+
+    db.record_sleep_sessions(
+        device_id,
+        sync_id,
+        reference=datetime(2026, 5, 27, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=42,
+                sleep_start_minutes=1434,
+                sleep_end_minutes=413,
+                periods=[SleepPeriod(stage="unknown-4", minutes=90), SleepPeriod(stage="deep", minutes=60)],
+            )
+        ],
+        raw_packet_hex="bc27",
+        source_command=39,
+    )
+
+    conn = db.connection
+    row = conn.execute(
+        "SELECT stage, is_provisional, raw_json FROM sleep_stage_samples ORDER BY sequence_index ASC LIMIT 1"
+    ).fetchone()
+    assert row["stage"] == "rem"
+    assert row["is_provisional"] == 1
+    assert "unknown-4" in row["raw_json"]
+    assert conn.execute("SELECT is_provisional FROM sleep_sessions").fetchone()[0] == 1
+    db.close()
+
+
 def test_storage_limits_same_day_heart_rate_rewrites_to_one_overlap_period(tmp_path):
     db = H59Database(tmp_path / "h59.sqlite")
     device_id = db.upsert_device(

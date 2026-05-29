@@ -1,19 +1,23 @@
 services:
-  grafana:
-    image: grafana/grafana-oss:11.1.0
-    container_name: h59-grafana
+  api:
+    build: ./api
+    container_name: h59-dashboard-api
     restart: unless-stopped
-    ports:
-      - "${GRAFANA_PORT:-3000}:3000"
     environment:
-      GF_INSTALL_PLUGINS: frser-sqlite-datasource
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_ANALYTICS_REPORTING_ENABLED: "false"
-      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      H59_DB_PATH: /data/h59.sqlite
+      H59_DASHBOARD_READONLY: "true"
+      H59_DASHBOARD_HOST: 0.0.0.0
+      H59_DASHBOARD_PORT: 8000
     volumes:
-      - ./grafana-data:/var/lib/grafana
-      - ./provisioning:/etc/grafana/provisioning:ro
-      - ./dashboards:/var/lib/grafana/dashboards:ro
-      - ${H59_DB_PATH:-../data/h59.sqlite}:/h59-data/h59.sqlite:ro
+      - ${H59_DB_PATH:-../data/h59.sqlite}:/data/h59.sqlite:ro
+    ports:
+      - "${H59_API_PORT:-8000}:8000"
+
+  web:
+    build: ./web
+    container_name: h59-dashboard-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${H59_WEB_PORT:-8080}:80"

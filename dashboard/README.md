@@ -1,44 +1,98 @@
 # H59 Dashboard
 
-This directory contains the optional visualization layer for `h59-local`.
+This directory now contains the primary visualization stack for `h59-local`.
 
-It is intentionally separate from the core CLI:
-- the CLI collects, decodes, stores, and validates data
-- Grafana reads the SQLite database in read-only mode
+The design follows the separation defined in
+[Visualization Layer Architecture](/Users/remi.turpaud/Code/h59/docs/software/visualisation_layer_architecture.md:1):
 
-## What Is Here
+- `h59` CLI handles BLE, protocol, sync, and SQLite storage
+- the dashboard reads the SQLite database through a small read-only API
+- the browser UI is a mobile-first React app
 
-- `docker-compose.yml`
-  - local Grafana runtime
-- `provisioning/`
-  - reproducible datasource and dashboard provisioning
-- `dashboards/`
-  - provisioned Grafana dashboard JSON
-- `sql/`
-  - optional helper SQL and example queries
-- `Makefile`
-  - convenience commands
-
-## Prerequisites
-
-- Docker and Docker Compose
-- an existing H59 SQLite database
-
-Create the database first if needed:
-
-```bash
-h59 sync -i
-```
-
-By default, the dashboard expects the source-checkout database:
+## Layout
 
 ```text
-../data/h59.sqlite
+dashboard/
+  api/   FastAPI read-only API over h59.sqlite
+  web/   React/Vite front-end
 ```
 
-If your CLI was installed globally and uses an XDG data path instead, override `H59_DB_PATH` in `.env`.
+## Local Development
 
-## Quickstart
+Use the runner script if you want simple start/stop/status handling:
+
+```bash
+cd dashboard
+./run.sh start
+./run.sh status
+./run.sh logs api
+./run.sh stop
+```
+
+The runner manages the backend virtual environment for you under:
+
+```text
+dashboard/api/.venv/
+```
+
+On `start`, it will:
+- create the API virtualenv if it does not exist
+- sync/update Python dependencies from `dashboard/api/pyproject.toml`
+- install/update frontend dependencies if `package.json` or `package-lock.json` changed
+- start the API in stable non-reload mode by default, which is better suited to a background service
+
+This starts:
+- API on `http://127.0.0.1:8000`
+- web app on `http://127.0.0.1:5173`
+
+Runtime files go under:
+
+```text
+dashboard/.run/
+```
+
+You can override local runner ports with:
+
+```text
+H59_API_DEV_PORT
+H59_WEB_DEV_PORT
+H59_DASHBOARD_API_PYTHON
+H59_DASHBOARD_API_RELOAD
+```
+
+`H59_DASHBOARD_API_PYTHON` is only needed if you want to force a specific Python for
+bootstrapping the backend environment. In normal use, `./run.sh` will manage
+`dashboard/api/.venv` itself.
+
+Set `H59_DASHBOARD_API_RELOAD=1` only if you explicitly want `uvicorn --reload`.
+For active API development, the manual foreground command is still the simplest option:
+
+If you prefer manual processes:
+
+Run the API:
+
+```bash
+cd dashboard/api
+PYTHONPATH=src python -m uvicorn h59_dashboard_api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Run the web app:
+
+```bash
+cd dashboard/web
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+The Vite dev server proxies `/api` to `http://127.0.0.1:8000` by default.
+
+## Local Production with Docker
 
 ```bash
 cd dashboard
@@ -49,62 +103,52 @@ docker compose up -d
 Open:
 
 ```text
-http://localhost:3000
+http://localhost:8080
 ```
 
-Default local login comes from `.env.example`:
-- user: `admin`
-- password: `admin`
+The API serves on:
 
-Change it before exposing Grafana outside your laptop or LAN.
+```text
+http://localhost:8000
+```
 
 ## Runtime Model
 
-The Grafana container mounts the SQLite database read-only:
+The dashboard stack reads the same SQLite database produced by the CLI:
 
 ```text
-${H59_DB_PATH} -> /h59-data/h59.sqlite:ro
+../data/h59.sqlite
 ```
 
-Grafana never writes back into the H59 database.
+or whatever `H59_DB_PATH` points to in `.env`.
 
-## Dashboards
+The API treats the database as read-only.
 
-Provisioned dashboards:
-- `H59 Overview`
-- `H59 Sleep & Recovery`
-- `H59 Data Quality`
+## First Implemented Endpoints
 
-They use a `device` variable populated from the `devices` table, so the same dashboard can target any registered bracelet in the database.
+- `GET /api/health`
+- `GET /api/devices`
+- `GET /api/today`
+- `GET /api/metrics/{metric}`
+- `GET /api/sleep`
+- `GET /api/device/status`
+- `GET /api/data-quality`
+- `GET /api/debug`
 
-## SQL Layer
+## First Implemented Pages
 
-The dashboards query the base schema directly so they work without modifying the SQLite file.
-
-Optional helper SQL lives in `sql/`:
-- `views.sql`
-- `dashboard_summary.sql`
-- `example_queries.sql`
-
-These are reference assets for ad hoc analysis or future materialized views.
-
-## Operations
-
-```bash
-make up
-make down
-make logs
-make restart
-```
-
-On macOS:
-
-```bash
-make open
-```
+- `Today`
+- `Trends`
+- `Sleep`
+- `Heart`
+- `Oxygen`
+- `Activity`
+- `Device`
+- `Debug`
 
 ## Notes
 
-- The Grafana SQLite datasource plugin is installed automatically on first start.
-- Dashboard timestamps are rendered from UTC data already stored by the CLI.
-- The current MVP focuses on real local data availability and completeness, not vendor-style UI parity.
+- The dashboard defaults to the preferred device.
+- The device selector accepts `preferred`, `device_id`, nickname, address, or device name.
+- All timestamps remain UTC from the database; the browser renders them as received today.
+- The old Grafana assets remain in the repository only as legacy reference material and are no longer the primary interface.

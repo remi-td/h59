@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 
 from bleak.exc import BleakError
@@ -212,3 +213,30 @@ def test_main_returns_clean_error_for_known_runtime_failure(monkeypatch, capsys)
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "No H59 device was discovered." in captured.err
+
+
+def test_daemon_status_warns_for_stale_heartbeat(tmp_path, monkeypatch, capsys):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "daemon.pid").write_text("12345\n")
+    (state_dir / "daemon.json").write_text(
+        json.dumps(
+            {
+                "db": "data/h59.sqlite",
+                "incremental": True,
+                "last_activity_at": "2026-05-28T00:00:00+00:00",
+                "last_cycle_state": "sleeping",
+                "period_seconds": 300,
+            }
+        )
+    )
+    monkeypatch.setattr("h59_client.cli.pid_is_running", lambda pid: True)
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 5, 29, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr("h59_client.cli.datetime", FrozenDateTime)
+    exit_code = main(["daemon", "status", "--state-dir", str(state_dir)])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "warning: daemon heartbeat is stale" in captured.out

@@ -20,7 +20,7 @@ The current CLI can:
 - trigger simple device actions such as vibration and reboot
 - generate markdown reports for a device and validate data completeness
 
-An optional Grafana visualization stack is also provided under:
+An optional local web dashboard is also provided under:
 - `dashboard/`
 
 ## Install
@@ -165,7 +165,7 @@ Contributor guidance:
 - `src/h59_client/`: installable CLI package
 - `tests/`: unit tests
 - `tools/`: small project utilities
-- `dashboard/`: optional Grafana provisioning, dashboards, and helper SQL
+- `dashboard/`: optional FastAPI + React local web dashboard
 - `docs/software/`: user-facing software documentation
 - `docs/research/`: reverse-engineering findings kept separate from CLI docs
 - `data/`: runtime databases and generated outputs, intentionally not tracked

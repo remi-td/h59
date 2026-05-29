@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h59-dashboard-api"
+version = "0.0.1"
+description = "Read-only FastAPI dashboard API for h59-local"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28.0",
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+h59-dashboard-api = "h59_dashboard_api.main:run"

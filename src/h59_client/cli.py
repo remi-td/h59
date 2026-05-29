@@ -234,6 +234,17 @@ def configure_daemon_logging(log_file: Path) -> None:
     )
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def update_metadata(meta_file: Path, updates: dict[str, Any]) -> dict[str, Any]:
+    metadata = read_metadata(meta_file) or {}
+    metadata.update(updates)
+    write_metadata(meta_file, metadata)
+    return metadata
+
+
 def build_sync_child_command(args: argparse.Namespace) -> list[str]:
     cmd = [sys.executable, "-m", "h59_client.cli", "sync", "--daemon-child"]
     if args.selector:
@@ -290,6 +301,9 @@ def spawn_daemon(args: argparse.Namespace) -> int:
             "pid_file": str(pid_file),
             "state_dir": str(state_dir),
             "started_at": time.time(),
+            "started_at_iso": _utc_now_iso(),
+            "last_activity_at": _utc_now_iso(),
+            "last_cycle_state": "starting",
         },
     )
     return proc.pid
@@ -344,8 +358,8 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    metadata = read_metadata(meta_file) or {}
-    metadata.update(
+    metadata = update_metadata(
+        meta_file,
         {
             "pid": os.getpid(),
             "db": args.db,
@@ -355,9 +369,11 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
             "log_file": str(log_file),
             "pid_file": str(pid_file),
             "state_dir": str(state_dir),
-        }
+            "started_at_iso": (read_metadata(meta_file) or {}).get("started_at_iso", _utc_now_iso()),
+            "last_activity_at": _utc_now_iso(),
+            "last_cycle_state": "starting",
+        },
     )
-    write_metadata(meta_file, metadata)
 
     logger.info(
         "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss",
@@ -369,6 +385,14 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
 
     while not stop_requested:
         cycle_started = time.time()
+        update_metadata(
+            meta_file,
+            {
+                "last_activity_at": _utc_now_iso(),
+                "last_cycle_started_at": _utc_now_iso(),
+                "last_cycle_state": "running",
+            },
+        )
         try:
             results = asyncio.run(
                 sync_h59(
@@ -393,14 +417,50 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     result["queried_days"],
                     result["captured_gatt"],
                 )
+            update_metadata(
+                meta_file,
+                {
+                    "last_activity_at": _utc_now_iso(),
+                    "last_cycle_finished_at": _utc_now_iso(),
+                    "last_cycle_state": "idle",
+                    "last_cycle_result": f"ok:{len(results)}",
+                },
+            )
         except Exception as exc:
             notice = format_daemon_operational_notice(exc)
             if notice is not None:
                 logger.info(notice)
+                update_metadata(
+                    meta_file,
+                    {
+                        "last_activity_at": _utc_now_iso(),
+                        "last_cycle_finished_at": _utc_now_iso(),
+                        "last_cycle_state": "idle",
+                        "last_cycle_result": notice,
+                    },
+                )
             else:
                 logger.exception("sync cycle failed")
+                update_metadata(
+                    meta_file,
+                    {
+                        "last_activity_at": _utc_now_iso(),
+                        "last_cycle_finished_at": _utc_now_iso(),
+                        "last_cycle_state": "idle",
+                        "last_cycle_result": f"error:{type(exc).__name__}",
+                    },
+                )
 
         sleep_seconds = max(0, args.period_seconds - (time.time() - cycle_started))
+        update_metadata(
+            meta_file,
+            {
+                "last_activity_at": _utc_now_iso(),
+                "last_cycle_state": "sleeping",
+                "next_cycle_due_at": datetime.now(UTC).timestamp() + sleep_seconds,
+                "next_cycle_due_at_iso": datetime.fromtimestamp(datetime.now(UTC).timestamp() + sleep_seconds, UTC).isoformat(),
+            },
+        )
         deadline = time.time() + sleep_seconds
         while not stop_requested and time.time() < deadline:
             time.sleep(min(1.0, max(0, deadline - time.time())))
@@ -596,6 +656,17 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
     print(f"h59 daemon is running (pid={pid})")
     print(f"pid file: {pid_file}")
     print(f"log file: {log_file}")
+    stale = False
+    last_activity_raw = metadata.get("last_activity_at")
+    period_seconds = metadata.get("period_seconds")
+    if isinstance(last_activity_raw, str) and isinstance(period_seconds, (int, float)):
+        try:
+            last_activity = datetime.fromisoformat(last_activity_raw)
+        except ValueError:
+            last_activity = None
+        if last_activity is not None:
+            age_seconds = (datetime.now(UTC) - last_activity).total_seconds()
+            stale = age_seconds > (float(period_seconds) * 2 + 60)
     if metadata:
         if "db" in metadata:
             print(f"db: {metadata['db']}")
@@ -605,6 +676,20 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
             print(f"incremental: {metadata['incremental']}")
         if "period_seconds" in metadata:
             print(f"period_seconds: {metadata['period_seconds']}")
+        if "last_cycle_state" in metadata:
+            print(f"last_cycle_state: {metadata['last_cycle_state']}")
+        if "last_activity_at" in metadata:
+            print(f"last_activity_at: {metadata['last_activity_at']}")
+        if "last_cycle_started_at" in metadata:
+            print(f"last_cycle_started_at: {metadata['last_cycle_started_at']}")
+        if "last_cycle_finished_at" in metadata:
+            print(f"last_cycle_finished_at: {metadata['last_cycle_finished_at']}")
+        if "next_cycle_due_at_iso" in metadata:
+            print(f"next_cycle_due_at: {metadata['next_cycle_due_at_iso']}")
+        if "last_cycle_result" in metadata:
+            print(f"last_cycle_result: {metadata['last_cycle_result']}")
+    if stale:
+        print("warning: daemon heartbeat is stale; the process may be wedged and should be restarted")
     return 0
 
 
