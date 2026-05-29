@@ -546,13 +546,29 @@ th {
 }
 
 tbody tr {
-  cursor: pointer;
   transition: background 0.18s ease;
 }
 
 tbody tr:hover,
 tbody tr.is-selected-row {
   background: rgba(15, 118, 110, 0.08);
+}
+
+.table-row-button {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.table-row-button:hover,
+.table-row-button:focus-visible {
+  color: var(--accent-1);
+  outline: none;
 }
 
 @media (max-width: 980px) {

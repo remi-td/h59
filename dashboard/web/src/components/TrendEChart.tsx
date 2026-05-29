@@ -7,12 +7,14 @@ export function TrendEChart({
   summary,
   option,
   emptyMessage = "No data",
+  onEvents,
 }: {
   title: string;
   note: string;
   summary?: string | null;
   option?: EChartsOption | null;
   emptyMessage?: string;
+  onEvents?: Record<string, (params: unknown) => void>;
 }) {
   if (!option) {
     return <div className="panel-empty">{emptyMessage}</div>;
@@ -27,7 +29,7 @@ export function TrendEChart({
         </div>
         {summary ? <p className="chart-hover-readout">{summary}</p> : null}
       </header>
-      <ReactECharts option={option} opts={{ renderer: "svg" }} notMerge lazyUpdate className="trend-echart" style={{ height: 280 }} />
+      <ReactECharts option={option} onEvents={onEvents} opts={{ renderer: "svg" }} notMerge lazyUpdate className="trend-echart" style={{ height: 280 }} />
     </section>
   );
 }

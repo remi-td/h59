@@ -1,5 +1,7 @@
 # h59-local
 
+:warning: This project is in research stage and should be considered unstable. Bugs are guaranteed and contributions are welcome! :warning:
+
 `h59-local` is a CLI for locally collecting and analyzing data from the H59 smart band.
 
 The goal is simple:
@@ -18,10 +20,12 @@ The current CLI can:
 - run as a detached periodic sync daemon
 - store decoded measurements and raw protocol packets
 - trigger simple device actions such as vibration and reboot
+- prepare data for analytics
 - generate markdown reports for a device and validate data completeness
 
-An optional local web dashboard is also provided under:
-- `dashboard/`
+An optional local serving application is also provided under `dashboard/`. It provides:
+- a REST API serving the analytic data
+- a local React dashboard for browsing trends and quality information
 
 ## Install
 
@@ -144,6 +148,8 @@ Research notes are kept separately so the CLI software stays clean while the rev
 
 Software documentation:
 - [CLI Guide](/Users/remi.turpaud/Code/h59/docs/software/cli.md:1)
+- [Software Architecture](/Users/remi.turpaud/Code/h59/docs/software/architecture.md:1)
+- [Architecture TODO](/Users/remi.turpaud/Code/h59/docs/software/architecture_todo.md:1)
 - [Database Design](/Users/remi.turpaud/Code/h59/docs/software/database.md:1)
 - [Dashboard Requirements](/Users/remi.turpaud/Code/h59/docs/software/dashboard_requirements.md:1)
 

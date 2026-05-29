@@ -1,38 +1,21 @@
-import { useEffect, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { TodayResponse } from "../api/types";
+import { useEffect } from "react";
+import { useToday } from "../api/hooks";
 import { MetricCard } from "../components/MetricCard";
 
 export function Today({ device, onReportDateChange }: { device: string; onReportDateChange?: (value: string | null) => void }) {
-  const [data, setData] = useState<TodayResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, loading } = useToday(device);
 
   useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    dashboardApi
-      .today(device)
-      .then((payload) => {
-        if (!cancelled) {
-          setData(payload);
-          onReportDateChange?.(payload.date);
-        }
-      })
-      .catch((reason: Error) => {
-        if (!cancelled) {
-          setError(reason.message);
-        }
-      });
+    onReportDateChange?.(data?.date ?? null);
     return () => {
-      cancelled = true;
       onReportDateChange?.(null);
     };
-  }, [device, onReportDateChange]);
+  }, [data?.date, onReportDateChange]);
 
   if (error) {
     return <div className="panel-error">{error}</div>;
   }
-  if (!data) {
+  if (loading || !data) {
     return <div className="panel-loading">Loading today’s view…</div>;
   }
   return (

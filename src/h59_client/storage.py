@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from h59_client.analytics import ensure_analytic_views
 from h59_client.protocol import (
     ActivityBlock,
     BatteryStatus,
@@ -281,6 +282,7 @@ class H59Database:
         self.connection.executescript(SCHEMA)
         self._apply_migrations()
         self._cleanup_legacy_rows()
+        ensure_analytic_views(self.connection)
         self._write_metadata_defaults()
         self.connection.commit()
 

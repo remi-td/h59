@@ -1,26 +1,25 @@
-import { useEffect, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { MetricSeriesResponse } from "../api/types";
-import { DailyBars } from "../components/DailyBars";
+import { useMemo } from "react";
+import { useMetric } from "../api/hooks";
+import { TrendEChart } from "../components/TrendEChart";
+import { latestStepsSummary, rollingDaySlots, stepsTrendOption } from "../components/trend-options";
 
 export function Activity({ device }: { device: string }) {
-  const [steps, setSteps] = useState<MetricSeriesResponse | null>(null);
+  const { data, error, loading } = useMetric(device, "steps", "30d");
 
-  useEffect(() => {
-    let cancelled = false;
-    dashboardApi.metric("steps", device, "30d").then((payload) => {
-      if (!cancelled) {
-        setSteps(payload);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device]);
+  const endDate = useMemo(() => data?.points[data.points.length - 1]?.timestamp.slice(0, 10) ?? null, [data]);
+  const slots = useMemo(() => rollingDaySlots(endDate, 30), [endDate]);
+  const option = useMemo(() => stepsTrendOption(data?.points || [], slots), [data, slots]);
+
+  if (error) {
+    return <div className="panel-error">{error}</div>;
+  }
+  if (loading) {
+    return <div className="panel-loading">Loading activity trends…</div>;
+  }
 
   return (
     <div className="stack-layout">
-      <DailyBars points={steps?.points || []} title="30-Day Steps" color="var(--accent-2)" unit={steps?.unit || "steps"} yAxisLabel="Steps" xAxisLabel="Day" />
+      <TrendEChart title="Steps" note="Rolling 30 days" summary={latestStepsSummary(data?.points || [])} option={option} emptyMessage="No activity data" />
     </div>
   );
 }

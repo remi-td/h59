@@ -127,8 +127,8 @@ h59/
         components/
           MetricCard.tsx
           Sparkline.tsx
+          TrendEChart.tsx
           TimeSeriesChart.tsx
-          DailyBars.tsx
           SleepTimeline.tsx
           TrustBadge.tsx
           DataQualityBadge.tsx
@@ -436,8 +436,8 @@ Reusable chart components:
 |---|---|
 | `MetricCard` | Today overview card |
 | `Sparkline` | Small inline card chart |
+| `TrendEChart` | Reusable ECharts page-level wrapper |
 | `TimeSeriesChart` | Heart rate, SpO₂, HRV, stress |
-| `DailyBars` | Steps and sleep duration by day |
 | `SleepTimeline` | Sleep session and stages |
 | `TrendSummary` | Baseline comparison |
 | `TrustBadge` | Measurement confidence |

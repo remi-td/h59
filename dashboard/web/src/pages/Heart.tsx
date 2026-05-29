@@ -1,38 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { MetricSeriesResponse, SleepResponse } from "../api/types";
+import { useMemo } from "react";
+import { useHeartData } from "../api/hooks";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
-
-function maxTimestamp(values: Array<string | null | undefined>): string | null {
-  const timestamps = values.filter((value): value is string => Boolean(value));
-  if (!timestamps.length) {
-    return null;
-  }
-  return timestamps.reduce((latest, current) => (current > latest ? current : latest));
-}
+import { maxTimestamp } from "../lib/series";
 
 export function Heart({ device }: { device: string }) {
-  const [heart, setHeart] = useState<MetricSeriesResponse | null>(null);
-  const [hrv, setHrv] = useState<MetricSeriesResponse | null>(null);
-  const [sleep, setSleep] = useState<SleepResponse | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      dashboardApi.metric("heart-rate", device, "24h"),
-      dashboardApi.metric("hrv", device, "24h"),
-      dashboardApi.sleep(device, "7d"),
-    ]).then(([heartPayload, hrvPayload, sleepPayload]) => {
-      if (!cancelled) {
-        setHeart(heartPayload);
-        setHrv(hrvPayload);
-        setSleep(sleepPayload);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device]);
+  const { data, error, loading } = useHeartData(device);
+  const heart = data?.heart ?? null;
+  const hrv = data?.hrv ?? null;
+  const sleep = data?.sleep ?? null;
 
   const rangeEnd = useMemo(
     () =>
@@ -42,6 +17,13 @@ export function Heart({ device }: { device: string }) {
       ]),
     [heart, hrv],
   );
+
+  if (error) {
+    return <div className="panel-error">{error}</div>;
+  }
+  if (loading) {
+    return <div className="panel-loading">Loading heart metrics…</div>;
+  }
 
   return (
     <div className="stack-layout">

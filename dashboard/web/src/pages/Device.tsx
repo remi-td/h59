@@ -1,24 +1,17 @@
-import { useEffect, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { DataQualityResponse, DeviceStatusResponse } from "../api/types";
+import { useDeviceData } from "../api/hooks";
 import { DataQualityBadge } from "../components/DataQualityBadge";
 
 export function Device({ device }: { device: string }) {
-  const [status, setStatus] = useState<DeviceStatusResponse | null>(null);
-  const [quality, setQuality] = useState<DataQualityResponse | null>(null);
+  const { data, error, loading } = useDeviceData(device);
+  const status = data?.status ?? null;
+  const quality = data?.quality ?? null;
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([dashboardApi.deviceStatus(device), dashboardApi.dataQuality(device)]).then(([statusPayload, qualityPayload]) => {
-      if (!cancelled) {
-        setStatus(statusPayload);
-        setQuality(qualityPayload);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device]);
+  if (error) {
+    return <div className="panel-error">{error}</div>;
+  }
+  if (loading) {
+    return <div className="panel-loading">Loading device status…</div>;
+  }
 
   return (
     <div className="stack-layout">

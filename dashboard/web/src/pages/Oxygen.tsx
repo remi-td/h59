@@ -1,38 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { MetricSeriesResponse, SleepResponse } from "../api/types";
+import { useMemo } from "react";
+import { useOxygenData } from "../api/hooks";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
-
-function maxTimestamp(values: Array<string | null | undefined>): string | null {
-  const timestamps = values.filter((value): value is string => Boolean(value));
-  if (!timestamps.length) {
-    return null;
-  }
-  return timestamps.reduce((latest, current) => (current > latest ? current : latest));
-}
+import { maxTimestamp } from "../lib/series";
 
 export function Oxygen({ device }: { device: string }) {
-  const [spo2, setSpo2] = useState<MetricSeriesResponse | null>(null);
-  const [stress, setStress] = useState<MetricSeriesResponse | null>(null);
-  const [sleep, setSleep] = useState<SleepResponse | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      dashboardApi.metric("spo2", device, "24h"),
-      dashboardApi.metric("stress", device, "24h"),
-      dashboardApi.sleep(device, "7d"),
-    ]).then(([spo2Payload, stressPayload, sleepPayload]) => {
-      if (!cancelled) {
-        setSpo2(spo2Payload);
-        setStress(stressPayload);
-        setSleep(sleepPayload);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device]);
+  const { data, error, loading } = useOxygenData(device);
+  const spo2 = data?.spo2 ?? null;
+  const stress = data?.stress ?? null;
+  const sleep = data?.sleep ?? null;
 
   const rangeEnd = useMemo(
     () =>
@@ -42,6 +17,13 @@ export function Oxygen({ device }: { device: string }) {
       ]),
     [spo2, stress],
   );
+
+  if (error) {
+    return <div className="panel-error">{error}</div>;
+  }
+  if (loading) {
+    return <div className="panel-loading">Loading oxygen metrics…</div>;
+  }
 
   return (
     <div className="stack-layout">

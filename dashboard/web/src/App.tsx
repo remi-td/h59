@@ -1,16 +1,17 @@
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { dashboardApi } from "./api/client";
-import type { DeviceSummary, HealthResponse } from "./api/types";
+import { Suspense, lazy, useEffect, useState } from "react";
+import type { DeviceSummary } from "./api/types";
+import { useBootstrapData } from "./api/hooks";
 import { PageHeader } from "./components/PageHeader";
-import { Today } from "./pages/Today";
-import { Trends } from "./pages/Trends";
-import { Sleep } from "./pages/Sleep";
-import { Heart } from "./pages/Heart";
-import { Oxygen } from "./pages/Oxygen";
-import { Activity } from "./pages/Activity";
-import { Device } from "./pages/Device";
-import { Debug } from "./pages/Debug";
+
+const Today = lazy(() => import("./pages/Today").then((module) => ({ default: module.Today })));
+const Trends = lazy(() => import("./pages/Trends").then((module) => ({ default: module.Trends })));
+const Sleep = lazy(() => import("./pages/Sleep").then((module) => ({ default: module.Sleep })));
+const Heart = lazy(() => import("./pages/Heart").then((module) => ({ default: module.Heart })));
+const Oxygen = lazy(() => import("./pages/Oxygen").then((module) => ({ default: module.Oxygen })));
+const Activity = lazy(() => import("./pages/Activity").then((module) => ({ default: module.Activity })));
+const Device = lazy(() => import("./pages/Device").then((module) => ({ default: module.Device })));
+const Debug = lazy(() => import("./pages/Debug").then((module) => ({ default: module.Debug })));
 
 const NAV_ITEMS = [
   ["Today", "/"],
@@ -25,34 +26,18 @@ const NAV_ITEMS = [
 
 export default function App() {
   const location = useLocation();
-  const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [device, setDevice] = useState("preferred");
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [reportDate, setReportDate] = useState<string | null>(null);
+  const { data, error } = useBootstrapData();
+  const devices = data?.devices ?? [];
+  const health = data?.health ?? null;
 
   useEffect(() => {
-    let cancelled = false;
-    Promise.all([dashboardApi.devices(), dashboardApi.health()])
-      .then(([deviceList, healthPayload]) => {
-        if (!cancelled) {
-          setDevices(deviceList);
-          setHealth(healthPayload);
-          const preferred = deviceList.find((item) => item.is_preferred);
-          if (preferred?.nickname) {
-            setDevice(preferred.nickname);
-          }
-        }
-      })
-      .catch((reason: Error) => {
-        if (!cancelled) {
-          setError(reason.message);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    const preferred = devices.find((item) => item.is_preferred);
+    if (preferred?.nickname) {
+      setDevice((current) => (current === "preferred" ? preferred.nickname || current : current));
+    }
+  }, [devices]);
 
   const selectedDevice =
     devices.find((item) => (device === "preferred" && item.is_preferred) || item.nickname === device || String(item.id) === device || item.address === device) ?? null;
@@ -90,16 +75,18 @@ export default function App() {
           onDeviceChange={setDevice}
         />
         {error ? <div className="panel-error">{error}</div> : null}
-        <Routes>
-          <Route path="/" element={<Today device={device} onReportDateChange={setReportDate} />} />
-          <Route path="/trends" element={<Trends device={device} />} />
-          <Route path="/sleep" element={<Sleep device={device} />} />
-          <Route path="/heart" element={<Heart device={device} />} />
-          <Route path="/oxygen" element={<Oxygen device={device} />} />
-          <Route path="/activity" element={<Activity device={device} />} />
-          <Route path="/device" element={<Device device={device} />} />
-          <Route path="/debug" element={<Debug device={device} />} />
-        </Routes>
+        <Suspense fallback={<div className="panel-loading">Loading dashboard page…</div>}>
+          <Routes>
+            <Route path="/" element={<Today device={device} onReportDateChange={setReportDate} />} />
+            <Route path="/trends" element={<Trends device={device} />} />
+            <Route path="/sleep" element={<Sleep device={device} />} />
+            <Route path="/heart" element={<Heart device={device} />} />
+            <Route path="/oxygen" element={<Oxygen device={device} />} />
+            <Route path="/activity" element={<Activity device={device} />} />
+            <Route path="/device" element={<Device device={device} />} />
+            <Route path="/debug" element={<Debug device={device} />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );

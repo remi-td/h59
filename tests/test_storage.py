@@ -490,3 +490,85 @@ def test_storage_limits_same_day_activity_rewrites_to_one_overlap_period(tmp_pat
     assert [row["steps"] for row in rows] == [100, 101, 102, 103]
     assert [row["sync_id"] for row in rows] == [sync_id_1, sync_id_2, sync_id_2, sync_id_2]
     db.close()
+
+
+def test_storage_exposes_analytic_views(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-25T19:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-25T19:00:00+00:00", source="test")
+    db.record_heart_rate_settings(
+        device_id,
+        sync_id,
+        timestamp="2026-05-25T19:00:00+00:00",
+        settings=HeartRateLogSettings(enabled=True, interval=5),
+        raw_packet_hex="",
+    )
+    db.record_activity_blocks(
+        device_id,
+        sync_id,
+        blocks=[ActivityBlock(year=2026, month=5, day=25, time_index=28, calories=10, steps=100, distance=50)],
+        raw_packet_hex="",
+    )
+    db.record_heart_rate_day(
+        device_id,
+        sync_id,
+        day=HeartRateDay(
+            heart_rates=[62],
+            timestamp=datetime(2026, 5, 25, 0, 0, tzinfo=UTC),
+            size=1,
+            index=0,
+            range=5,
+        ),
+        raw_packet_hex="",
+    )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id,
+        reference=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=10,
+                sleep_start_minutes=1380,
+                sleep_end_minutes=360,
+                periods=[SleepPeriod(stage="light", minutes=120)],
+            )
+        ],
+        raw_packet_hex="",
+        source_command=39,
+    )
+
+    heart_interval = db.connection.execute(
+        "SELECT valid_from, valid_to, value FROM analytic_heart_rate_intervals WHERE device_id=? LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    activity_interval = db.connection.execute(
+        "SELECT valid_from, valid_to, steps FROM analytic_activity_intervals WHERE device_id=? LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    sleep_interval = db.connection.execute(
+        "SELECT valid_from, valid_to, stage FROM analytic_sleep_stage_intervals WHERE device_id=? LIMIT 1",
+        (device_id,),
+    ).fetchone()
+    daily_steps = db.connection.execute(
+        "SELECT steps_total FROM analytic_daily_steps WHERE device_id=? LIMIT 1",
+        (device_id,),
+    ).fetchone()
+
+    assert heart_interval is not None
+    assert heart_interval["valid_to"].endswith("+00:00")
+    assert activity_interval is not None
+    assert int(activity_interval["steps"]) == 100
+    assert sleep_interval is not None
+    assert sleep_interval["stage"] == "light"
+    assert daily_steps is not None
+    assert int(daily_steps["steps_total"]) == 100
+
+    db.close()

@@ -1,21 +1,14 @@
-import { useEffect, useState } from "react";
-import { dashboardApi } from "../api/client";
-import type { DebugResponse } from "../api/types";
+import { useDebug } from "../api/hooks";
 
 export function Debug({ device }: { device: string }) {
-  const [data, setData] = useState<DebugResponse | null>(null);
+  const { data, error, loading } = useDebug(device);
 
-  useEffect(() => {
-    let cancelled = false;
-    dashboardApi.debug(device).then((payload) => {
-      if (!cancelled) {
-        setData(payload);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [device]);
+  if (error) {
+    return <div className="panel-error">{error}</div>;
+  }
+  if (loading) {
+    return <div className="panel-loading">Loading debug data…</div>;
+  }
 
   return (
     <div className="stack-layout">
