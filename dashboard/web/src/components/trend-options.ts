@@ -1,16 +1,9 @@
 import type { EChartsOption } from "echarts";
 import type { MetricPoint, SleepSessionSummary } from "../api/types";
 import { formatShortDate } from "../lib/format";
+import { SLEEP_STAGE_COLORS } from "../lib/sleep-stage-colors";
 
 export const STAGE_ORDER = ["deep", "light", "rem", "awake", "unknown"] as const;
-
-export const STAGE_COLORS: Record<string, string> = {
-  deep: "#0f766e",
-  light: "#7c8f59",
-  rem: "#c27a31",
-  awake: "#c64545",
-  unknown: "#68756a",
-};
 
 export type DaySlot = {
   key: string;
@@ -80,10 +73,10 @@ export function stepsTrendOption(points: MetricPoint[], slots: DaySlot[], xAxisL
     grid: baseGrid(),
     tooltip: {
       trigger: "axis",
-      axisPointer: { type: "line", lineStyle: { color: "rgba(31, 38, 34, 0.18)" } },
-      backgroundColor: "rgba(255, 250, 242, 0.96)",
-      borderColor: "rgba(31, 38, 34, 0.12)",
-      textStyle: { color: "#1f2622" },
+      axisPointer: { type: "line", lineStyle: { color: "var(--line-strong)" } },
+      backgroundColor: "var(--tooltip-background)",
+      borderColor: "var(--tooltip-border)",
+      textStyle: { color: "var(--ink)" },
       formatter: (params: any) => {
         const point = Array.isArray(params) ? params[0] : params;
         if (!point || point.value === null || point.value === undefined || point.value === "-") {
@@ -118,8 +111,8 @@ export function stepsTrendOption(points: MetricPoint[], slots: DaySlot[], xAxisL
         data: values,
         symbol: "none",
         connectNulls: false,
-        lineStyle: { width: 3, color: "#c27a31" },
-        itemStyle: { color: "#c27a31" },
+        lineStyle: { width: 3, color: "var(--accent-2)" },
+        itemStyle: { color: "var(--accent-2)" },
         areaStyle: {
           color: {
             type: "linear",
@@ -128,8 +121,8 @@ export function stepsTrendOption(points: MetricPoint[], slots: DaySlot[], xAxisL
             x2: 0,
             y2: 1,
             colorStops: [
-              { offset: 0, color: "rgba(194, 122, 49, 0.26)" },
-              { offset: 1, color: "rgba(194, 122, 49, 0.02)" },
+              { offset: 0, color: "rgba(var(--accent-2-rgb), 0.26)" },
+              { offset: 1, color: "rgba(var(--accent-2-rgb), 0.02)" },
             ],
           },
         },
@@ -162,9 +155,9 @@ export function heartDistributionOption(points: MetricPoint[], slots: DaySlot[])
     grid: baseGrid(),
     tooltip: {
       trigger: "item",
-      backgroundColor: "rgba(255, 250, 242, 0.96)",
-      borderColor: "rgba(31, 38, 34, 0.12)",
-      textStyle: { color: "#1f2622" },
+      backgroundColor: "var(--tooltip-background)",
+      borderColor: "var(--tooltip-border)",
+      textStyle: { color: "var(--ink)" },
       formatter: (param: any) => {
         const value = param.data as number[];
         if (!value || Number.isNaN(value[0])) {
@@ -192,13 +185,13 @@ export function heartDistributionOption(points: MetricPoint[], slots: DaySlot[])
         type: "boxplot",
         data,
         itemStyle: {
-          color: "rgba(198, 69, 69, 0.72)",
-          borderColor: "#8f2222",
+          color: "rgba(var(--accent-4-rgb), 0.72)",
+          borderColor: "var(--accent-4)",
           borderWidth: 1.2,
         },
         emphasis: {
           itemStyle: {
-            color: "rgba(198, 69, 69, 0.84)",
+            color: "rgba(var(--accent-4-rgb), 0.84)",
           },
         },
       },
@@ -227,7 +220,7 @@ export function sleepStageTrendOption(sessions: SleepSessionSummary[], slots: Da
     type: "bar" as const,
     stack: "sleep",
     barWidth: 28,
-    itemStyle: { color: STAGE_COLORS[stage], borderRadius: [6, 6, 0, 0] },
+    itemStyle: { color: SLEEP_STAGE_COLORS[stage], borderRadius: [6, 6, 0, 0] },
     emphasis: { focus: "series" as const },
     data: slots.map((slot) => byDay.get(slot.key)?.[stage] ?? 0),
   }));
@@ -252,9 +245,9 @@ export function sleepStageTrendOption(sessions: SleepSessionSummary[], slots: Da
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "shadow" },
-      backgroundColor: "rgba(255, 250, 242, 0.96)",
-      borderColor: "rgba(31, 38, 34, 0.12)",
-      textStyle: { color: "#1f2622" },
+      backgroundColor: "var(--tooltip-background)",
+      borderColor: "var(--tooltip-border)",
+      textStyle: { color: "var(--ink)" },
       formatter: (params: any) => {
         const items = Array.isArray(params) ? params : [params];
         const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0);

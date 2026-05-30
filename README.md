@@ -106,6 +106,8 @@ Main commands:
 - `h59 device vibrate [device_id|nickname|address]`
 - `h59 device reboot [device_id|nickname|address]`
 - `h59 vibrate [device_id|nickname|address]`
+- `h59 config show`
+- `h59 config set-device-clock <utc|local>`
 
 The top-level `h59 vibrate` command is kept as a shorthand for `h59 device vibrate`.
 
@@ -118,6 +120,14 @@ Selector behavior:
 Incremental sync behavior:
 - if a device already has sync history in the database, `h59 sync -i` resumes from the latest recorded sync day
 - if the device has no prior sync history, `h59 sync -i` performs an initial backfill and probes backward until the device stops returning daily history, within a bounded search window
+- routine sync sets the bracelet clock as part of the capability handshake
+- the default bracelet clock mode is `utc`
+
+Clock mode:
+- by default, `h59-local` writes `UTC` to the bracelet and stores all backend timestamps in UTC
+- you can override a single command with `--device-clock local`
+- you can persist the default with `h59 config set-device-clock local`
+- show the effective configuration with `h59 config show`
 
 ## Dashboard services
 
@@ -143,6 +153,13 @@ The runner will:
 - install frontend dependencies under `dashboard/web/`
 - start the API on `http://127.0.0.1:8000`
 - start the web app on `http://127.0.0.1:5173`
+
+Dashboard theme defaults are configured in:
+
+```text
+dashboard/web/src/theme-config.ts
+dashboard/web/src/themes.css
+```
 
 Useful service commands:
 

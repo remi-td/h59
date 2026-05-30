@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+import os
+import time
 
 from h59_client.protocol import (
     ActivityBlockParser,
@@ -13,6 +15,7 @@ from h59_client.protocol import (
     parse_realtime_packet,
     read_hrv_history_packet,
     read_pressure_history_packet,
+    set_time_packet,
 )
 
 
@@ -111,6 +114,22 @@ def test_parse_realtime_packet():
     parsed = parse_realtime_packet(bytearray.fromhex("6903000000000000000000000000006c"))
     assert parsed.metric == "spo2"
     assert parsed.value == 0
+
+
+def test_set_time_packet_preserves_provided_wall_time(monkeypatch):
+    previous_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "Europe/Paris")
+        time.tzset()
+        packet = set_time_packet(datetime(2026, 5, 30, 5, 40, tzinfo=UTC))
+    finally:
+        if previous_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous_tz)
+        time.tzset()
+
+    assert packet.hex() == "012605300540000100000000000000a2"
 
 
 def test_pressure_history_packet_uses_selector_byte():

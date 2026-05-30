@@ -287,7 +287,7 @@ def read_heart_rate_packet(target: datetime) -> bytearray:
 
 
 def set_time_packet(target: datetime) -> bytearray:
-    dt = target.astimezone(UTC)
+    dt = target if target.tzinfo is not None else target.astimezone()
     data = bytearray(7)
     data[0] = byte_to_bcd(dt.year % 2000)
     data[1] = byte_to_bcd(dt.month)

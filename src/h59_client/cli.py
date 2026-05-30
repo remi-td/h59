@@ -31,6 +31,14 @@ except ImportError:  # pragma: no cover - older bleak versions do not expose thi
 
 from h59_client import __version__
 from h59_client.actions import fetch_capabilities_h59, fetch_device_info_h59, reboot_h59, vibrate_h59
+from h59_client.config import (
+    DEFAULT_DEVICE_CLOCK_MODE,
+    DEVICE_CLOCK_MODES,
+    default_config_path,
+    read_config,
+    resolve_device_clock_mode,
+    write_config,
+)
 from h59_client.devices import discover_and_store_targets
 from h59_client.report import render_health_dashboard_report
 from h59_client.storage import H59Database
@@ -253,8 +261,10 @@ def build_sync_child_command(args: argparse.Namespace) -> list[str]:
     cmd.extend(["--period", str(args.period_seconds)])
     if args.incremental:
         cmd.append("--incremental")
-    if args.skip_capabilities:
-        cmd.append("--skip-capabilities")
+    if getattr(args, "device_clock", None):
+        cmd.extend(["--device-clock", args.device_clock])
+    if getattr(args, "config", None):
+        cmd.extend(["--config", args.config])
     if args.capture_gatt:
         cmd.append("--capture-gatt")
     if args.state_dir:
@@ -323,6 +333,7 @@ def print_sync_results(results: list[dict[str, Any]]) -> None:
 
 
 def run_foreground_sync(args: argparse.Namespace) -> int:
+    device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
     results = asyncio.run(
         sync_h59(
             db_path=args.db,
@@ -330,7 +341,7 @@ def run_foreground_sync(args: argparse.Namespace) -> int:
             name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
             incremental=args.incremental,
-            capture_capabilities=not args.skip_capabilities,
+            device_clock_mode=device_clock_mode,
             capture_gatt=args.capture_gatt,
             realtime_metrics=args.realtime,
             realtime_samples=args.realtime_samples,
@@ -376,11 +387,12 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
     )
 
     logger.info(
-        "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss",
+        "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss device_clock=%s",
         args.db,
         args.selector,
         args.incremental,
         args.period_seconds,
+        resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config),
     )
 
     while not stop_requested:
@@ -394,6 +406,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
             },
         )
         try:
+            device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
             results = asyncio.run(
                 sync_h59(
                     db_path=args.db,
@@ -401,7 +414,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     name=DEFAULT_DISCOVERY_NAME,
                     scan_timeout=args.scan_timeout,
                     incremental=args.incremental,
-                    capture_capabilities=not args.skip_capabilities,
+                    device_clock_mode=device_clock_mode,
                     capture_gatt=args.capture_gatt,
                     realtime_metrics=args.realtime,
                     realtime_samples=args.realtime_samples,
@@ -512,15 +525,45 @@ def handle_device_info(args: argparse.Namespace) -> int:
 
 
 def handle_device_capabilities(args: argparse.Namespace) -> int:
+    device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
     result = asyncio.run(
         fetch_capabilities_h59(
             db_path=args.db,
             selector=args.selector,
             name=DEFAULT_DISCOVERY_NAME,
             scan_timeout=args.scan_timeout,
+            device_clock_mode=device_clock_mode,
         )
     )
     print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def handle_config_show(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    payload = read_config(config_path)
+    effective_clock = resolve_device_clock_mode(config_path=config_path)
+    print(
+        json.dumps(
+            {
+                "config_path": str(config_path),
+                "device_clock": payload.get("device_clock", DEFAULT_DEVICE_CLOCK_MODE),
+                "effective_device_clock": effective_clock,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def handle_config_set_device_clock(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    payload = read_config(config_path)
+    payload["device_clock"] = args.mode
+    write_config(payload, config_path)
+    print(f"Configured device clock mode: {args.mode}")
+    print(f"Config file: {config_path}")
     return 0
 
 
@@ -758,12 +801,24 @@ def add_target_arguments(parser: argparse.ArgumentParser, *, selector_required: 
     parser.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
 
 
+def add_device_clock_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--device-clock",
+        choices=DEVICE_CLOCK_MODES,
+        help="device clock mode override for this command: utc or local",
+    )
+    parser.add_argument(
+        "--config",
+        help=f"config file path (default: {default_config_path()})",
+    )
+
+
 def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
     add_target_arguments(parser)
+    add_device_clock_arguments(parser)
     parser.add_argument("-i", "--incremental", action="store_true", help="sync from the latest recorded sync timestamp for each device")
     parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
     parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
-    parser.add_argument("--skip-capabilities", action="store_true", help="skip the capability snapshot probe")
     parser.add_argument("--capture-gatt", action="store_true", help="force a full GATT inventory capture during sync")
     parser.add_argument("--realtime", nargs="*", default=[], choices=sorted({
         "heart-rate",
@@ -837,6 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     device_capabilities = device_subparsers.add_parser("capabilities", help="query and print parsed device capability flags")
     add_target_arguments(device_capabilities)
+    add_device_clock_arguments(device_capabilities)
     device_capabilities.set_defaults(handler=handle_device_capabilities)
 
     device_vibrate = device_subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
@@ -870,6 +926,18 @@ def build_parser() -> argparse.ArgumentParser:
     db_reset = db_subparsers.add_parser("reset", help="archive the current database and initialize a fresh one")
     add_db_argument(db_reset)
     db_reset.set_defaults(handler=handle_db_reset)
+
+    config_parser = subparsers.add_parser("config", help="inspect or modify CLI configuration")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)
+
+    config_show = config_subparsers.add_parser("show", help="show effective configuration")
+    config_show.add_argument("--config", help=f"config file path (default: {default_config_path()})")
+    config_show.set_defaults(handler=handle_config_show)
+
+    config_set = config_subparsers.add_parser("set-device-clock", help="set the default bracelet clock mode")
+    config_set.add_argument("mode", choices=DEVICE_CLOCK_MODES, help="default device clock mode")
+    config_set.add_argument("--config", help=f"config file path (default: {default_config_path()})")
+    config_set.set_defaults(handler=handle_config_set_device_clock)
 
     return parser
 

@@ -133,6 +133,7 @@ Behavior:
 - known devices skip fresh discovery and connect directly by stored address
 - `h59 sync -i` resumes from the latest recorded sync day for known devices
 - if a device has no prior sync history, `h59 sync -i` performs an initial backfill and probes backward until the device stops returning daily history, within a bounded search window
+- routine sync sets the bracelet clock as part of the capability handshake
 
 Common flags:
 - `-i`, `--incremental`
@@ -141,10 +142,17 @@ Common flags:
 - `--db <path>`
 - `[selector]`
 - `--scan-timeout <seconds>`
-- `--skip-capabilities`
+- `--device-clock <utc|local>`
+- `--config <path>`
 - `--capture-gatt`
 - `--realtime <metric>...`
 - `--realtime-samples <n>`
+
+Clock mode policy:
+- default bracelet clock mode is `utc`
+- `--device-clock local` switches a single command to local wall time
+- `h59 config set-device-clock local` persists the default in the CLI config file
+- `h59 config show` prints the effective configuration
 
 Duration format:
 - integer seconds, for example `300`
@@ -183,6 +191,26 @@ h59 device info left-wrist
 h59 device capabilities left-wrist
 h59 device vibrate left-wrist
 h59 device reboot left-wrist
+```
+
+Note:
+- `h59 device capabilities` performs the protocol set-time exchange using the configured bracelet clock mode
+
+## `config`
+
+Purpose:
+- inspect and modify CLI configuration
+
+Subcommands:
+- `show`
+- `set-device-clock`
+
+Examples:
+
+```bash
+h59 config show
+h59 config set-device-clock utc
+h59 config set-device-clock local
 ```
 
 ## `daemon`

@@ -52,6 +52,14 @@ INITIAL_BACKFILL_MAX_DAYS = 60
 INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS = 2
 
 
+def device_clock_now(mode: str) -> datetime:
+    if mode == "local":
+        return date_utils.local_now()
+    if mode == "utc":
+        return date_utils.utc_now()
+    raise ValueError(f"unsupported device clock mode: {mode}")
+
+
 def determine_history_selector(*, now: datetime, target: datetime) -> int:
     day_offset = (date_utils.start_of_day(now).date() - date_utils.start_of_day(target).date()).days
     if day_offset < 0:
@@ -99,8 +107,8 @@ async def _query_heart_rate_day(transport: PacketTransport, *, target: datetime)
         return parsed, packets, observed_at
 
 
-async def _query_capabilities(transport: PacketTransport):
-    await transport.send_packet(set_time_packet(date_utils.utc_now()))
+async def _query_capabilities(transport: PacketTransport, *, device_clock_mode: str):
+    await transport.send_packet(set_time_packet(device_clock_now(device_clock_mode)))
     packet, observed_at = (await transport.read_command_packets(CMD_SET_TIME))[0]
     return parse_capabilities(packet), packet.hex(), observed_at
 
@@ -185,7 +193,7 @@ async def sync_one_h59(
     db_path: str | Path,
     target: DeviceTarget,
     incremental: bool = False,
-    capture_capabilities: bool = True,
+    device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
@@ -255,15 +263,17 @@ async def sync_one_h59(
                     raw_packet_hex=hr_settings_packet_hex,
                 )
 
-                if capture_capabilities:
-                    capabilities, capability_packet_hex, capability_ts = await _query_capabilities(transport)
-                    database.record_capabilities(
-                        device_id,
-                        sync_id,
-                        timestamp=capability_ts,
-                        capabilities=capabilities,
-                        raw_packet_hex=capability_packet_hex,
-                    )
+                capabilities, capability_packet_hex, capability_ts = await _query_capabilities(
+                    transport,
+                    device_clock_mode=device_clock_mode,
+                )
+                database.record_capabilities(
+                    device_id,
+                    sync_id,
+                    timestamp=capability_ts,
+                    capabilities=capabilities,
+                    raw_packet_hex=capability_packet_hex,
+                )
 
                 if bigdata_transport is not None:
                     sleep_sessions, sleep_payload_hex, _sleep_ts = await _query_bigdata_sleep(bigdata_transport)
@@ -411,7 +421,7 @@ async def sync_h59(
     name: str = "H59",
     scan_timeout: float = 20.0,
     incremental: bool = False,
-    capture_capabilities: bool = True,
+    device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
@@ -428,7 +438,7 @@ async def sync_h59(
                 db_path=db_path,
                 target=target,
                 incremental=incremental,
-                capture_capabilities=capture_capabilities,
+                device_clock_mode=device_clock_mode,
                 capture_gatt=capture_gatt,
                 realtime_metrics=realtime_metrics,
                 realtime_samples=realtime_samples,
@@ -445,7 +455,7 @@ async def sync_h59(
             db_path=db_path,
             target=target,
             incremental=incremental,
-            capture_capabilities=capture_capabilities,
+            device_clock_mode=device_clock_mode,
             capture_gatt=capture_gatt,
             realtime_metrics=realtime_metrics,
             realtime_samples=realtime_samples,

@@ -33,15 +33,15 @@ function formatMetricPoint(point: MetricPoint, unit?: string | null): string {
 
 function areaColorFor(lineColor: string): string {
   if (lineColor === "var(--accent-2)") {
-    return "rgba(194, 122, 49, 0.20)";
+    return "rgba(var(--accent-2-rgb), 0.20)";
   }
   if (lineColor === "var(--accent-3)") {
-    return "rgba(124, 143, 89, 0.20)";
+    return "rgba(var(--accent-3-rgb), 0.20)";
   }
   if (lineColor === "var(--accent-4)") {
-    return "rgba(198, 69, 69, 0.20)";
+    return "rgba(var(--accent-4-rgb), 0.20)";
   }
-  return "rgba(15, 118, 110, 0.20)";
+  return "rgba(var(--accent-1-rgb), 0.20)";
 }
 
 function toTimestamp(value: string | null | undefined): number | null {
@@ -130,11 +130,11 @@ export function TimeSeriesChart({
       animation: false,
       grid: { left: 70, right: 24, top: 18, bottom: 54 },
       tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "line", lineStyle: { color: "rgba(31, 38, 34, 0.18)" } },
-        backgroundColor: "rgba(255, 250, 242, 0.96)",
-        borderColor: "rgba(31, 38, 34, 0.12)",
-        textStyle: { color: "#1f2622" },
+      trigger: "axis",
+      axisPointer: { type: "line", lineStyle: { color: "var(--line-strong)" } },
+      backgroundColor: "var(--tooltip-background)",
+      borderColor: "var(--tooltip-border)",
+      textStyle: { color: "var(--ink)" },
         confine: true,
         extraCssText: "max-width: 280px; white-space: normal; box-shadow: 0 12px 28px rgba(31, 38, 34, 0.12);",
         position: (point: number[], _params: unknown, _dom: unknown, _rect: unknown, size: { contentSize: number[]; viewSize: number[] }) => {
@@ -207,7 +207,7 @@ export function TimeSeriesChart({
             shadeSleep && sleepBands.length
               ? {
                   silent: true,
-                  itemStyle: { color: "rgba(15, 118, 110, 0.08)" },
+                  itemStyle: { color: "rgba(var(--accent-1-rgb), 0.08)" },
                   data: sleepBands,
                 }
               : undefined,

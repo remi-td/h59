@@ -4,7 +4,7 @@
 
 This document updates the dashboard architecture for the `h59` project.
 
-The recommendation is to move away from Grafana as the primary user interface and build a lightweight, mobile-first web application that displays personal health KPIs in a clear card-based interface.
+The recommendation is to build a lightweight, mobile-first web application that displays personal health KPIs in a clear card-based interface.
 
 The core principle is separation of concerns:
 
@@ -691,7 +691,7 @@ The MVP is complete when:
 9. Add data-quality page.
 10. Add PWA support.
 11. Add baseline analytics.
-12. Consider optional Grafana later only as a diagnostic/engineering interface.
+12. Keep the visualization stack focused on the web application and avoid parallel dashboarding systems.
 
 ## 18. Deliberate Non-Goals for Version 1
 
@@ -704,7 +704,7 @@ Do not build these in version 1:
 - Cloud sync.
 - Vendor-app integration.
 - Custom BLE logic in the dashboard.
-- Grafana as the primary interface.
+- A second dashboarding stack in parallel with the web application.
 - PostgreSQL or TimescaleDB unless SQLite becomes limiting.
 
 ## 19. Final Recommendation
@@ -726,7 +726,5 @@ Dashboard product:
 Use SQLite as the first dashboard data source.
 
 Use a browser/mobile responsive web app as the primary interface.
-
-Keep Grafana optional and separate.
 
 Keep the core CLI small, reliable, and independent from the dashboard.

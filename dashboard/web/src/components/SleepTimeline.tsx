@@ -1,18 +1,7 @@
 import { useMemo } from "react";
 import type { SleepStageSegment } from "../api/types";
 import { formatTime } from "../lib/format";
-
-const STAGE_COLORS: Record<string, string> = {
-  deep: "var(--accent-1)",
-  light: "var(--accent-3)",
-  rem: "var(--accent-2)",
-  awake: "var(--accent-4)",
-  unknown: "var(--ink-soft)",
-};
-
-function stageColor(stage: string): string {
-  return STAGE_COLORS[stage] || STAGE_COLORS.unknown;
-}
+import { sleepStageColor } from "../lib/sleep-stage-colors";
 
 function stageLabel(stage: string): string {
   return stage.toUpperCase();
@@ -54,7 +43,7 @@ export function SleepTimeline({
             className="sleep-segment"
             style={{
               width: `${(stage.minutes / total) * 100}%`,
-              background: stageColor(stage.stage),
+              background: sleepStageColor(stage.stage),
             }}
             title={`${stageLabel(stage.stage)} · ${stage.minutes} min${stage.start_timestamp ? ` · ${formatTime(stage.start_timestamp)}` : ""}${stage.end_timestamp ? ` -> ${formatTime(stage.end_timestamp)}` : ""}`}
           />
@@ -63,7 +52,7 @@ export function SleepTimeline({
       <div className="sleep-legend">
         {legendEntries.map((entry) => (
           <span key={entry.stage} className="sleep-legend-item">
-            <span className="sleep-legend-swatch" style={{ background: stageColor(entry.stage) }} />
+            <span className="sleep-legend-swatch" style={{ background: sleepStageColor(entry.stage) }} />
             <span>{stageLabel(entry.stage)} · {entry.minutes} min</span>
           </span>
         ))}

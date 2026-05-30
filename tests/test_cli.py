@@ -34,6 +34,23 @@ def test_build_parser_supports_sync_daemon_shorthand_flags():
     assert args.db == "data/test.sqlite"
 
 
+def test_build_parser_supports_device_clock_override():
+    parser = build_parser()
+    args = parser.parse_args(["sync", "--device-clock", "local"])
+    assert args.device_clock == "local"
+
+
+def test_build_parser_supports_config_commands():
+    parser = build_parser()
+    show_args = parser.parse_args(["config", "show"])
+    set_args = parser.parse_args(["config", "set-device-clock", "local"])
+    assert show_args.command == "config"
+    assert show_args.config_command == "show"
+    assert set_args.command == "config"
+    assert set_args.config_command == "set-device-clock"
+    assert set_args.mode == "local"
+
+
 def test_default_runtime_paths_use_state_dir_override(tmp_path):
     parser = build_parser()
     args = parser.parse_args(["sync", "--state-dir", str(tmp_path / "state")])

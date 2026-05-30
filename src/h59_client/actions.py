@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 
 from h59_client.ble import PacketTransport, read_device_versions
+from h59_client import date_utils
 from h59_client.devices import connect_target, resolve_single_target
 from h59_client.protocol import (
     BATTERY_PACKET,
@@ -90,6 +90,7 @@ async def fetch_capabilities_h59(
     selector: str | None = None,
     name: str = "H59",
     scan_timeout: float = 20.0,
+    device_clock_mode: str = "utc",
 ) -> dict[str, object]:
     target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
     client = await connect_target(target)
@@ -97,7 +98,8 @@ async def fetch_capabilities_h59(
         transport = PacketTransport(client)
         await transport.start()
         try:
-            await transport.send_packet(set_time_packet(datetime.now(UTC)))
+            target_time = date_utils.local_now() if device_clock_mode == "local" else date_utils.utc_now()
+            await transport.send_packet(set_time_packet(target_time))
             packet, _observed_at = (await transport.read_command_packets(CMD_SET_TIME))[0]
         finally:
             await transport.stop()

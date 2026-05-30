@@ -45,6 +45,15 @@ This starts:
 - API on `http://127.0.0.1:8000`
 - web app on `http://127.0.0.1:5173`
 
+Dashboard themes are configured separately from application logic:
+
+```text
+dashboard/web/src/theme-config.ts
+dashboard/web/src/themes.css
+```
+
+Change `DEFAULT_DASHBOARD_THEME` in `theme-config.ts` to switch the default theme.
+
 Runtime files go under:
 
 ```text
@@ -150,5 +159,4 @@ The API treats the database as read-only.
 
 - The dashboard defaults to the preferred device.
 - The device selector accepts `preferred`, `device_id`, nickname, address, or device name.
-- All timestamps remain UTC from the database; the browser renders them as received today.
-- The old Grafana assets remain in the repository only as legacy reference material and are no longer the primary interface.
+- All timestamps remain UTC at rest; the UI renders browser-local display time and explicitly labels the policy in the header.

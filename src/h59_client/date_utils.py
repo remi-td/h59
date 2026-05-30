@@ -10,6 +10,10 @@ def utc_now() -> datetime:
     return datetime.now(tz=UTC)
 
 
+def local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
 def start_of_day(ts: datetime) -> datetime:
     return ts.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 

@@ -1,17 +1,6 @@
 import { useState } from "react";
 import type { MetricBreakdownItem } from "../api/types";
-
-const STAGE_COLORS: Record<string, string> = {
-  deep: "var(--accent-1)",
-  light: "var(--accent-3)",
-  rem: "var(--accent-2)",
-  awake: "var(--accent-4)",
-  unknown: "var(--ink-soft)",
-};
-
-function colorFor(label: string): string {
-  return STAGE_COLORS[label] || STAGE_COLORS.unknown;
-}
+import { sleepStageColor } from "../lib/sleep-stage-colors";
 
 function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number) {
   const angleRad = ((angleDeg - 90) * Math.PI) / 180;
@@ -53,7 +42,7 @@ export function SleepStagePie({
     return {
       ...item,
       path: arcPath(50, 50, 40, startAngle, endAngle),
-      color: colorFor(item.label),
+      color: sleepStageColor(item.label),
       percent: Math.round((item.value / total) * 100),
     };
   });
@@ -77,7 +66,7 @@ export function SleepStagePie({
               <title>{formatSliceLabel(slice.label, slice.value, slice.percent)}</title>
             </path>
           ))}
-          <circle cx="50" cy="50" r="20" fill="rgba(255, 250, 242, 0.96)" />
+          <circle cx="50" cy="50" r="20" fill="var(--tooltip-background)" />
         </svg>
         <p className="sleep-pie-readout">{formatSliceLabel(activeSlice.label, activeSlice.value, activeSlice.percent)}</p>
       </div>
