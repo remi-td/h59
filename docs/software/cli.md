@@ -32,6 +32,7 @@ Commands:
 - `daemon`
 - `vibrate`
 - `db`
+- `config`
 
 ## Most Common Commands
 
@@ -102,6 +103,12 @@ Safe database reset:
 
 ```bash
 h59 db reset
+```
+
+Print the effective database path:
+
+```bash
+h59 db path
 ```
 
 ## `report`
@@ -234,11 +241,15 @@ Purpose:
 
 Subcommands:
 - `reset`
+- `path`
 
 Behavior of `h59 db reset`:
 - if the database exists, it is renamed to `archive_<YYYYMMDD-HHMISS>_h59.sqlite`
 - a fresh database is then created at the configured `--db` path
 - the archived file is retained and must be deleted manually if no longer needed
+
+Behavior of `h59 db path`:
+- prints the effective SQLite database path after resolving the default or the provided `--db`
 
 ## Exit Behavior
 

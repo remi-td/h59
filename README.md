@@ -96,6 +96,7 @@ Main commands:
 - `h59 sync -di --period 5m`
 - `h59 report [device_id|nickname|address]`
 - `h59 db reset`
+- `h59 db path`
 - `h59 daemon status`
 - `h59 daemon stop`
 - `h59 device discover`
@@ -140,6 +141,13 @@ Clone the repo first, then use the runner:
 git clone https://github.com/remi-td/h59.git
 cd h59/dashboard
 ./run.sh start
+```
+
+To point the dashboard at the same database as the CLI:
+
+```bash
+cd h59/dashboard
+./run.sh start --db "$(h59 db path)"
 ```
 
 Open:

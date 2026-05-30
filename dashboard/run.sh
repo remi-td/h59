@@ -12,6 +12,7 @@ PROJECT_SRC_DIR="$PROJECT_ROOT/src"
 API_VENV_DIR="$API_DIR/.venv"
 API_ENV_STAMP="$RUN_DIR/api-env.stamp"
 WEB_DEPS_STAMP="$WEB_DIR/node_modules/.package-lock.json"
+CLI_DB_OVERRIDE=""
 
 mkdir -p "$RUN_DIR"
 
@@ -149,9 +150,12 @@ start_api() {
   fi
   echo "Starting api on http://$API_HOST:$API_PORT"
   echo "  python: $api_python"
+  if [[ -n "$CLI_DB_OVERRIDE" ]]; then
+    echo "  db: $CLI_DB_OVERRIDE"
+  fi
   (
     cd "$ROOT_DIR"
-    pid="$(spawn_detached "$(api_log_file)" env VIRTUAL_ENV="$API_VENV_DIR" PATH="$API_VENV_DIR/bin:$PATH" PYTHONPATH="$API_DIR/src:$PROJECT_SRC_DIR${PYTHONPATH:+:$PYTHONPATH}" H59_DB_PATH="${H59_DB_PATH:-$PROJECT_ROOT/data/h59.sqlite}" "$api_python" "${uvicorn_args[@]}")"
+    pid="$(spawn_detached "$(api_log_file)" env VIRTUAL_ENV="$API_VENV_DIR" PATH="$API_VENV_DIR/bin:$PATH" PYTHONPATH="$API_DIR/src:$PROJECT_SRC_DIR${PYTHONPATH:+:$PYTHONPATH}" H59_DB_PATH="${CLI_DB_OVERRIDE:-${H59_DB_PATH:-$PROJECT_ROOT/data/h59.sqlite}}" "$api_python" "${uvicorn_args[@]}")"
     echo "$pid" >"$(api_pid_file)"
   )
   sleep 1
@@ -270,9 +274,9 @@ PY
 usage() {
   cat <<EOF
 Usage:
-  ./run.sh start [api|web|all]
+  ./run.sh start [api|web|all] [--db PATH]
   ./run.sh stop [api|web|all]
-  ./run.sh restart [api|web|all]
+  ./run.sh restart [api|web|all] [--db PATH]
   ./run.sh status [api|web|all]
   ./run.sh logs [api|web]
 
@@ -280,11 +284,39 @@ Defaults:
   target defaults to all
   api url: http://$API_HOST:$API_PORT
   web url: http://$WEB_HOST:$WEB_PORT
+  db path defaults to \$H59_DB_PATH or $PROJECT_ROOT/data/h59.sqlite
 EOF
 }
 
 command="${1:-status}"
-target="${2:-all}"
+target="all"
+
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  target="$1"
+  shift
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --db)
+      if [[ $# -lt 2 ]]; then
+        echo "--db requires a path" >&2
+        usage
+        exit 1
+      fi
+      CLI_DB_OVERRIDE="$(cd "$PROJECT_ROOT" && python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' "$2")"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 case "$command" in
   start)

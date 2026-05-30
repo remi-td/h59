@@ -158,6 +158,14 @@ def test_build_parser_supports_db_reset_command():
     assert args.db == "data/test.sqlite"
 
 
+def test_build_parser_supports_db_path_command():
+    parser = build_parser()
+    args = parser.parse_args(["db", "path", "--db", "data/test.sqlite"])
+    assert args.command == "db"
+    assert args.db_command == "path"
+    assert args.db == "data/test.sqlite"
+
+
 def test_build_parser_supports_report_command():
     parser = build_parser()
     args = parser.parse_args(["report", "left-wrist", "--db", "data/test.sqlite", "--date", "2026-05-27", "--output", "report.md"])

@@ -782,6 +782,11 @@ def handle_db_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_db_path(args: argparse.Namespace) -> int:
+    print(Path(args.db).expanduser().resolve())
+    return 0
+
+
 def add_db_argument(parser: argparse.ArgumentParser) -> None:
     db_default = str(default_db_path())
     parser.add_argument(
@@ -926,6 +931,10 @@ def build_parser() -> argparse.ArgumentParser:
     db_reset = db_subparsers.add_parser("reset", help="archive the current database and initialize a fresh one")
     add_db_argument(db_reset)
     db_reset.set_defaults(handler=handle_db_reset)
+
+    db_path_parser = db_subparsers.add_parser("path", help="print the effective SQLite database path")
+    add_db_argument(db_path_parser)
+    db_path_parser.set_defaults(handler=handle_db_path)
 
     config_parser = subparsers.add_parser("config", help="inspect or modify CLI configuration")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)

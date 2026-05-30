@@ -29,6 +29,13 @@ cd dashboard
 ./run.sh stop
 ```
 
+To run the dashboard against the same database used by the CLI:
+
+```bash
+cd dashboard
+./run.sh start --db "$(h59 db path)"
+```
+
 The runner manages the backend virtual environment for you under:
 
 ```text
@@ -40,6 +47,7 @@ On `start`, it will:
 - sync/update Python dependencies from `dashboard/api/pyproject.toml`
 - install/update frontend dependencies if `package.json` or `package-lock.json` changed
 - start the API in stable non-reload mode by default, which is better suited to a background service
+- use the `--db` override as `H59_DB_PATH` for the API if provided
 
 This starts:
 - API on `http://127.0.0.1:8000`
