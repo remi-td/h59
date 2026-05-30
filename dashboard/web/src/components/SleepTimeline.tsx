@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type { SleepStageSegment } from "../api/types";
-import { formatTime } from "../lib/format";
+import { formatDurationMinutes, formatSleepWindow } from "../lib/format";
 import { sleepStageColor } from "../lib/sleep-stage-colors";
 
 function stageLabel(stage: string): string {
@@ -23,17 +23,22 @@ export function SleepTimeline({
     });
     return Array.from(totals.entries()).map(([stage, minutes]) => ({ stage, minutes }));
   }, [stages]);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   if (!stages.length) {
     return <div className="panel-empty">No sleep stage segments</div>;
   }
   const total = stages.reduce((sum, stage) => sum + stage.minutes, 0) || 1;
+  const hoveredStage = hoveredIndex === null ? null : stages[hoveredIndex];
+  const readout = hoveredStage
+    ? `${stageLabel(hoveredStage.stage)} · ${formatSleepWindow(hoveredStage.start_timestamp, hoveredStage.end_timestamp)} · ${formatDurationMinutes(hoveredStage.minutes)}`
+    : subtitle;
   return (
     <section className="chart-panel">
       <header className="chart-panel-header">
         <div>
           <h3>{title}</h3>
-          {subtitle ? <p className="chart-hover-readout">{subtitle}</p> : null}
+          {readout ? <p className="sleep-timeline-readout">{readout}</p> : null}
         </div>
       </header>
       <div className="sleep-timeline">
@@ -45,7 +50,8 @@ export function SleepTimeline({
               width: `${(stage.minutes / total) * 100}%`,
               background: sleepStageColor(stage.stage),
             }}
-            title={`${stageLabel(stage.stage)} · ${stage.minutes} min${stage.start_timestamp ? ` · ${formatTime(stage.start_timestamp)}` : ""}${stage.end_timestamp ? ` -> ${formatTime(stage.end_timestamp)}` : ""}`}
+            onMouseEnter={() => setHoveredIndex(index)}
+            onMouseLeave={() => setHoveredIndex((current) => (current === index ? null : current))}
           />
         ))}
       </div>
@@ -53,7 +59,7 @@ export function SleepTimeline({
         {legendEntries.map((entry) => (
           <span key={entry.stage} className="sleep-legend-item">
             <span className="sleep-legend-swatch" style={{ background: sleepStageColor(entry.stage) }} />
-            <span>{stageLabel(entry.stage)} · {entry.minutes} min</span>
+            <span>{stageLabel(entry.stage)} · {formatDurationMinutes(entry.minutes)}</span>
           </span>
         ))}
       </div>

@@ -4,6 +4,8 @@ Date:
 - 2026-05-26
 - updated 2026-05-27 with live selector probing for pressure and HRV history
 - updated 2026-05-28 with fresh retention and gap-recovery checks
+- updated 2026-05-30 with fresh sleep-history revalidation
+- updated 2026-05-30 with fresh blood-pressure path revalidation
 
 ## Goal
 
@@ -17,7 +19,7 @@ Additional local artifact:
 The current sync was incomplete.
 
 What is now proven:
-- sleep history is available
+- sleep payloads are available on the Big Data service
 - historical blood oxygen is available
 - historical pressure/stress-like data is available
 - historical HRV data is available
@@ -35,10 +37,18 @@ What remains unresolved:
 Result:
 - the older UART sleep command path did not produce usable data
 - the secondary Big Data service returned structured sleep history
+- fresh one-shot syncs on 2026-05-30, against brand-new databases, returned only the latest sleep night plus one ambiguous alternate block
+- those fresh syncs produced the same result in both `device_clock=utc` and `device_clock=local` modes
+- the older database appeared to contain several nights because it accumulated one current-night payload across several different sync days
+- the current sync implementation queries sleep once per sync, outside the per-day backfill loop used for heart rate and activity
+- the current client sleep parser and the older legacy probe parser disagree on how `bytes_used` should be interpreted, which means sleep payload field semantics are still not final
 
 Assessment:
 - sleep is available
 - the correct transport is the secondary Big Data service
+- true multi-night backfill from a single proven request is not established yet
+- the current evidence is more consistent with "latest sleep night only" than with "full sleep history backfill"
+- there is still a parser/packet-alignment risk around `days_ago` and `bytes_used`
 
 ### Blood Oxygen / SpO2
 
@@ -92,10 +102,13 @@ Result:
 - the currently tested realtime path did not produce usable values
 - direct timestamped `0x14` historical probes produced no responses during the 2026-05-27 live test
 - `0x69` data requests for blood pressure only acknowledged with zero-valued `0x69` responses
+- a fresh live probe on 2026-05-30 still produced no `cmd 20` blood-pressure history packets and no usable `dataType=2` realtime payloads
+- the `HealthCheck` request path (`0x69`, `dataType=5`) did produce repeated non-zero packets late in the measurement window, but not yet in a decoded systolic/diastolic form
 
 Assessment:
 - blood pressure support is still unresolved
-- a different historical path likely exists, but it is not proven yet
+- a different path likely exists, and `HealthCheck` is now a stronger candidate than `dataType=2`
+- the local data model should preserve separate systolic and diastolic values once that path is decoded
 
 ### History Retention and Gap Recovery
 
@@ -141,6 +154,11 @@ The later retention check adds two important conclusions:
 - the bracelet can answer a 7-day history query and returned all stored history back to first use
 - the remaining gaps seen in fresh databases are device-side history gaps, not artifacts introduced by the local sync process
 
+Sleep is narrower than pressure and HRV:
+- the Big Data sleep path is real and should be kept
+- but the current evidence does not prove that one sync can backfill several older nights
+- if more than the latest night is required, the remaining work is sleep-specific reverse engineering rather than simple loop expansion
+
 ## Next Implementation Steps
 
 1. Update `read_pressure_history_packet()` and `read_hrv_history_packet()` so the first request byte is a selector parameter instead of a hard-coded `0`.
@@ -148,3 +166,5 @@ The later retention check adds two important conclusions:
 3. Keep the secondary Big Data transport for sleep and blood oxygen.
 4. Refine the HRV decoder to 16-bit sample parsing and trim trailing empty slots correctly.
 5. Investigate historical blood pressure separately.
+6. Reconcile the current sleep parser with the older probe parser and revalidate `days_ago` / `bytes_used` semantics.
+7. Check whether the Big Data sleep request supports a history selector or alternate request shape for older nights.

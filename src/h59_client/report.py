@@ -745,11 +745,11 @@ def _coverage_rows(
     bp_data = "blood-pressure" in realtime
     rows.append(
         (
-            "Blood pressure estimate",
+            "Blood pressure",
             _status_label(bp_data, partial=bp_supported),
             "Realtime endpoint only" if bp_data else ("Device advertises support, but no stored observations exist" if bp_supported else "No capture path proven"),
             "Missing" if not bp_data else "Partial",
-            "No historical sync path, no systolic/diastolic presentation rules, must remain labelled as estimated",
+            "No proven local extraction path yet; any future presentation must preserve separate systolic and diastolic values",
         )
     )
 

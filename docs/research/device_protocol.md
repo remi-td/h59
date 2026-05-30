@@ -101,8 +101,10 @@ Transport:
 - secondary Big Data service
 
 Assessment:
-- proven available
+- sleep payload proven available
 - decoder still provisional
+- multi-night backfill from one sync is not proven
+- current sync asks for sleep only once per run, unlike heart-rate and activity backfill
 
 ### Blood oxygen history
 
@@ -168,5 +170,6 @@ Assessment:
 Still unresolved:
 - historical blood pressure extraction
 - final sleep field semantics
+- whether the proven Big Data sleep request can backfill several older nights or only the latest night
 - final blood oxygen field semantics
 - exact meaning of some pressure/stress-like values

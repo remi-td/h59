@@ -33,6 +33,15 @@ export function formatSleepWindow(start: string | null | undefined, end: string 
   return `${formatTime(start)} -> ${formatTime(end)}`;
 }
 
+export function formatDurationMinutes(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "n/a";
+  }
+  const minutes = Math.max(0, Math.trunc(value));
+  const hours = Math.floor(minutes / 60);
+  return `${pad(hours)}:${pad(minutes % 60)}`;
+}
+
 export function formatShortDate(value: string | null | undefined): string {
   const date = parseTimestamp(value);
   if (!date) {

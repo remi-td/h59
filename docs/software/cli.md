@@ -111,6 +111,12 @@ Print the effective database path:
 h59 db path
 ```
 
+Merge older historical measurements from another database:
+
+```bash
+h59 db merge-history /path/to/older.sqlite
+```
+
 ## `report`
 
 Purpose:
@@ -242,6 +248,7 @@ Purpose:
 Subcommands:
 - `reset`
 - `path`
+- `merge-history`
 
 Behavior of `h59 db reset`:
 - if the database exists, it is renamed to `archive_<YYYYMMDD-HHMISS>_h59.sqlite`
@@ -250,6 +257,19 @@ Behavior of `h59 db reset`:
 
 Behavior of `h59 db path`:
 - prints the effective SQLite database path after resolving the default or the provided `--db`
+
+Behavior of `h59 db merge-history <from_db>`:
+- migrates only device measurement data
+- maps devices by `devices.address`
+- creates new `syncs` rows in the target database with `source='db.merge_history'`
+- treats the merge as historic backfill only
+- for each device and each migratable entity, imports only rows older than the earliest timestamp already present in the target entity
+- does not migrate:
+  - raw packets
+  - GATT metadata
+  - capability snapshots
+  - heart-rate settings
+  - existing sync rows from the source database
 
 ## Exit Behavior
 

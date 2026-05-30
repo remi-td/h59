@@ -12,6 +12,7 @@ from h59_client.analytics import ensure_analytic_views
 from h59_client.protocol import (
     ActivityBlock,
     BatteryStatus,
+    BloodPressureReading,
     BloodOxygenHistory,
     HeartRateDay,
     HeartRateLogSettings,
@@ -217,6 +218,20 @@ CREATE TABLE IF NOT EXISTS blood_oxygen_samples (
     FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
 );
 
+CREATE TABLE IF NOT EXISTS blood_pressure_readings (
+    blood_pressure_reading_id INTEGER PRIMARY KEY,
+    device_id INTEGER NOT NULL,
+    sync_id INTEGER NOT NULL,
+    timestamp TEXT NOT NULL CHECK (substr(timestamp, -6) = '+00:00'),
+    systolic INTEGER NOT NULL,
+    diastolic INTEGER NOT NULL,
+    source_command INTEGER,
+    raw_packet_hex TEXT,
+    UNIQUE(device_id, timestamp, source_command),
+    FOREIGN KEY(device_id) REFERENCES devices(device_id),
+    FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
+);
+
 CREATE TABLE IF NOT EXISTS pressure_samples (
     pressure_sample_id INTEGER PRIMARY KEY,
     device_id INTEGER NOT NULL,
@@ -272,6 +287,76 @@ def normalize_sleep_stage(stage: str) -> str:
     return stage
 
 
+MIGRATION_SOURCE_CODE = "db.merge_history"
+
+MIGRATABLE_TIMESTAMP_TABLES: dict[str, dict[str, Any]] = {
+    "heart_rates": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["reading", "timestamp", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO heart_rates(reading, timestamp, device_id, sync_id, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "sport_details": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["calories", "steps", "distance", "timestamp", "time_index", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO sport_details(calories, steps, distance, timestamp, device_id, sync_id, time_index, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "battery_samples": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "battery_level", "charging", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT INTO battery_samples(device_id, sync_id, timestamp, battery_level, charging, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "realtime_samples": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "metric", "value", "error_code", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT INTO realtime_samples(device_id, sync_id, timestamp, metric, value, error_code, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "blood_oxygen_samples": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "sample_index", "min_percent", "max_percent", "interval_minutes", "is_provisional", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO blood_oxygen_samples(device_id, sync_id, timestamp, sample_index, min_percent, max_percent, interval_minutes, is_provisional, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "blood_pressure_readings": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "systolic", "diastolic", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO blood_pressure_readings(device_id, sync_id, timestamp, systolic, diastolic, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "pressure_samples": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "sample_index", "value", "interval_minutes", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO pressure_samples(device_id, sync_id, timestamp, sample_index, value, interval_minutes, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+    "hrv_samples": {
+        "timestamp_column": "timestamp",
+        "select_columns": ["timestamp", "sample_index", "value", "interval_minutes", "source_command", "raw_packet_hex"],
+        "insert_sql": """
+            INSERT OR IGNORE INTO hrv_samples(device_id, sync_id, timestamp, sample_index, value, interval_minutes, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+    },
+}
+
+
 class H59Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -288,6 +373,23 @@ class H59Database:
 
     def close(self) -> None:
         self.connection.close()
+
+    def _earliest_timestamp(self, table: str, device_id: int, timestamp_column: str) -> datetime | None:
+        row = self.connection.execute(
+            f"SELECT MIN({timestamp_column}) FROM {table} WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return datetime.fromisoformat(str(row[0]))
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        return row is not None
 
     def _write_metadata_defaults(self) -> None:
         self.connection.executemany(
@@ -487,6 +589,380 @@ class H59Database:
             return None
         return datetime.fromisoformat(row[0])
 
+    def merge_history_from(
+        self,
+        source_path: str | Path,
+        *,
+        migration_source: str = MIGRATION_SOURCE_CODE,
+    ) -> dict[str, Any]:
+        source_db_path = Path(source_path).expanduser().resolve()
+        target_db_path = self.path.expanduser().resolve()
+        if source_db_path == target_db_path:
+            raise ValueError("source and target databases must be different")
+        if not source_db_path.exists():
+            raise ValueError(f"source database does not exist: {source_db_path}")
+
+        source_conn = sqlite3.connect(source_db_path)
+        source_conn.row_factory = sqlite3.Row
+        try:
+            source_devices = source_conn.execute(
+                """
+                SELECT device_id, address, name, advertisement_json, hw_version, fw_version, last_seen_at
+                FROM devices
+                ORDER BY device_id ASC
+                """
+            ).fetchall()
+            merged_devices: list[dict[str, Any]] = []
+            for source_device in source_devices:
+                existing_target_row = self.connection.execute(
+                    "SELECT device_id FROM devices WHERE address=?",
+                    (str(source_device["address"]),),
+                ).fetchone()
+                target_device_id = self.upsert_device(
+                    address=str(source_device["address"]),
+                    name=source_device["name"],
+                    advertisement=json.loads(source_device["advertisement_json"]) if source_device["advertisement_json"] else None,
+                    hw_version=source_device["hw_version"],
+                    fw_version=source_device["fw_version"],
+                    last_seen_at=source_device["last_seen_at"] or datetime.now(UTC),
+                )
+                device_summary = self._merge_device_history(
+                    source_conn,
+                    source_device_id=int(source_device["device_id"]),
+                    target_device_id=target_device_id,
+                    target_address=str(source_device["address"]),
+                    source_db_path=source_db_path,
+                    migration_source=migration_source,
+                )
+                if device_summary["imported_rows"] > 0:
+                    merged_devices.append(device_summary)
+                elif existing_target_row is None:
+                    self.connection.execute("DELETE FROM devices WHERE device_id=?", (target_device_id,))
+            self.connection.commit()
+            return {
+                "source_db": str(source_db_path),
+                "target_db": str(target_db_path),
+                "migration_source": migration_source,
+                "devices": merged_devices,
+                "imported_rows": sum(int(device["imported_rows"]) for device in merged_devices),
+            }
+        finally:
+            source_conn.close()
+
+    def _merge_device_history(
+        self,
+        source_conn: sqlite3.Connection,
+        *,
+        source_device_id: int,
+        target_device_id: int,
+        target_address: str,
+        source_db_path: Path,
+        migration_source: str,
+    ) -> dict[str, Any]:
+        per_entity: dict[str, int] = {}
+        migration_sync_id: int | None = None
+
+        def ensure_sync() -> int:
+            nonlocal migration_sync_id
+            if migration_sync_id is None:
+                started_at = datetime.now(UTC)
+                comment = f"history merge from {source_db_path}"
+                migration_sync_id = self.create_sync(
+                    target_device_id,
+                    started_at=started_at,
+                    source=migration_source,
+                    comment=comment,
+                )
+                self.finish_sync(migration_sync_id, finished_at=started_at)
+            return migration_sync_id
+
+        for table, config in MIGRATABLE_TIMESTAMP_TABLES.items():
+            count = self._merge_timestamp_table(
+                source_conn,
+                table=table,
+                source_device_id=source_device_id,
+                target_device_id=target_device_id,
+                timestamp_column=str(config["timestamp_column"]),
+                select_columns=list(config["select_columns"]),
+                insert_sql=str(config["insert_sql"]),
+                sync_id_factory=ensure_sync,
+            )
+            per_entity[table] = count
+
+        sleep_counts = self._merge_sleep_history(
+            source_conn,
+            source_device_id=source_device_id,
+            target_device_id=target_device_id,
+            sync_id_factory=ensure_sync,
+        )
+        per_entity.update(sleep_counts)
+
+        imported_rows = sum(per_entity.values())
+        return {
+            "source_device_id": source_device_id,
+            "target_device_id": target_device_id,
+            "address": target_address,
+            "sync_id": migration_sync_id,
+            "imported_rows": imported_rows,
+            "entities": per_entity,
+        }
+
+    def _merge_timestamp_table(
+        self,
+        source_conn: sqlite3.Connection,
+        *,
+        table: str,
+        source_device_id: int,
+        target_device_id: int,
+        timestamp_column: str,
+        select_columns: list[str],
+        insert_sql: str,
+        sync_id_factory: Any,
+    ) -> int:
+        if not self._table_exists(source_conn, table):
+            return 0
+        earliest_target = self._earliest_timestamp(table, target_device_id, timestamp_column)
+        source_rows = source_conn.execute(
+            f"""
+            SELECT {", ".join(select_columns)}
+            FROM {table}
+            WHERE device_id=?
+            ORDER BY {timestamp_column} ASC
+            """,
+            (source_device_id,),
+        ).fetchall()
+        if not source_rows:
+            return 0
+
+        rows_to_insert: list[tuple[Any, ...]] = []
+        for row in source_rows:
+            row_ts = datetime.fromisoformat(str(row[timestamp_column]))
+            if earliest_target is not None and row_ts >= earliest_target:
+                continue
+            sync_id = sync_id_factory()
+            if table == "heart_rates":
+                rows_to_insert.append((row["reading"], utc_text(row["timestamp"]), target_device_id, sync_id, row["source_command"], row["raw_packet_hex"]))
+            elif table == "sport_details":
+                rows_to_insert.append(
+                    (
+                        row["calories"],
+                        row["steps"],
+                        row["distance"],
+                        utc_text(row["timestamp"]),
+                        target_device_id,
+                        sync_id,
+                        row["time_index"],
+                        row["source_command"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "battery_samples":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["battery_level"],
+                        row["charging"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "realtime_samples":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["metric"],
+                        row["value"],
+                        row["error_code"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "blood_oxygen_samples":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["sample_index"],
+                        row["min_percent"],
+                        row["max_percent"],
+                        row["interval_minutes"],
+                        row["is_provisional"],
+                        row["source_command"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "blood_pressure_readings":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["systolic"],
+                        row["diastolic"],
+                        row["source_command"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "pressure_samples":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["sample_index"],
+                        row["value"],
+                        row["interval_minutes"],
+                        row["source_command"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            elif table == "hrv_samples":
+                rows_to_insert.append(
+                    (
+                        target_device_id,
+                        sync_id,
+                        utc_text(row["timestamp"]),
+                        row["sample_index"],
+                        row["value"],
+                        row["interval_minutes"],
+                        row["source_command"],
+                        row["raw_packet_hex"],
+                    )
+                )
+            else:
+                raise ValueError(f"unsupported migration table: {table}")
+
+        if not rows_to_insert:
+            return 0
+        before = self.connection.total_changes
+        self.connection.executemany(insert_sql, rows_to_insert)
+        return self.connection.total_changes - before
+
+    def _merge_sleep_history(
+        self,
+        source_conn: sqlite3.Connection,
+        *,
+        source_device_id: int,
+        target_device_id: int,
+        sync_id_factory: Any,
+    ) -> dict[str, int]:
+        if not self._table_exists(source_conn, "sleep_sessions"):
+            return {"sleep_sessions": 0, "sleep_stage_samples": 0}
+        earliest_target = self._earliest_timestamp("sleep_sessions", target_device_id, "end_timestamp")
+        source_sessions = source_conn.execute(
+            """
+            SELECT *
+            FROM sleep_sessions
+            WHERE device_id=?
+            ORDER BY end_timestamp ASC, start_timestamp ASC
+            """,
+            (source_device_id,),
+        ).fetchall()
+        imported_sessions = 0
+        imported_stages = 0
+        for session in source_sessions:
+            effective_ts = session["end_timestamp"] or session["start_timestamp"]
+            if effective_ts is None:
+                continue
+            if earliest_target is not None and datetime.fromisoformat(str(effective_ts)) >= earliest_target:
+                continue
+            sync_id = sync_id_factory()
+            before = self.connection.total_changes
+            cur = self.connection.execute(
+                """
+                INSERT OR IGNORE INTO sleep_sessions(
+                    device_id,
+                    sync_id,
+                    start_timestamp,
+                    end_timestamp,
+                    total_minutes,
+                    state,
+                    score,
+                    is_provisional,
+                    source_command,
+                    raw_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_device_id,
+                    sync_id,
+                    session["start_timestamp"],
+                    session["end_timestamp"],
+                    session["total_minutes"],
+                    session["state"],
+                    session["score"],
+                    session["is_provisional"],
+                    session["source_command"],
+                    session["raw_json"],
+                ),
+            )
+            inserted_session = self.connection.total_changes > before
+            target_sleep_session_id = int(cur.lastrowid) if inserted_session else int(
+                self.connection.execute(
+                    """
+                    SELECT sleep_session_id
+                    FROM sleep_sessions
+                    WHERE device_id=? AND source_command=? AND raw_json=?
+                    """,
+                    (target_device_id, session["source_command"], session["raw_json"]),
+                ).fetchone()[0]
+            )
+            if inserted_session:
+                imported_sessions += 1
+                if not self._table_exists(source_conn, "sleep_stage_samples"):
+                    continue
+                stage_rows = source_conn.execute(
+                    """
+                    SELECT sequence_index, stage, start_timestamp, end_timestamp, minutes, is_provisional, raw_json
+                    FROM sleep_stage_samples
+                    WHERE sleep_session_id=?
+                    ORDER BY sequence_index ASC
+                    """,
+                    (int(session["sleep_session_id"]),),
+                ).fetchall()
+                before = self.connection.total_changes
+                self.connection.executemany(
+                    """
+                    INSERT OR IGNORE INTO sleep_stage_samples(
+                        sleep_session_id,
+                        device_id,
+                        sync_id,
+                        sequence_index,
+                        stage,
+                        start_timestamp,
+                        end_timestamp,
+                        minutes,
+                        is_provisional,
+                        raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            target_sleep_session_id,
+                            target_device_id,
+                            sync_id,
+                            row["sequence_index"],
+                            normalize_sleep_stage(str(row["stage"])),
+                            row["start_timestamp"],
+                            row["end_timestamp"],
+                            row["minutes"],
+                            row["is_provisional"],
+                            row["raw_json"],
+                        )
+                        for row in stage_rows
+                    ],
+                )
+                imported_stages += self.connection.total_changes - before
+        return {
+            "sleep_sessions": imported_sessions,
+            "sleep_stage_samples": imported_stages,
+        }
+
     def _get_latest_metric_timestamp(self, table: str, device_id: int) -> datetime | None:
         row = self.connection.execute(
             f"SELECT MAX(timestamp) FROM {table} WHERE device_id=?",
@@ -637,6 +1113,42 @@ class H59Database:
             [
                 (device_id, sync_id, observed_at_text, sample.metric, sample.value, sample.error_code, raw_packet_hex)
                 for sample, raw_packet_hex in samples
+            ],
+        )
+        self.connection.commit()
+
+    def record_blood_pressure_readings(
+        self,
+        device_id: int,
+        sync_id: int,
+        *,
+        readings: list[BloodPressureReading],
+        raw_packet_hex: str | None = None,
+        source_command: int = 20,
+    ) -> None:
+        if not readings:
+            return
+        self.connection.executemany(
+            """
+            INSERT INTO blood_pressure_readings(device_id, sync_id, timestamp, systolic, diastolic, source_command, raw_packet_hex)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(device_id, timestamp, source_command) DO UPDATE SET
+                systolic=excluded.systolic,
+                diastolic=excluded.diastolic,
+                sync_id=excluded.sync_id,
+                raw_packet_hex=excluded.raw_packet_hex
+            """,
+            [
+                (
+                    device_id,
+                    sync_id,
+                    utc_text(reading.timestamp),
+                    reading.systolic,
+                    reading.diastolic,
+                    source_command,
+                    raw_packet_hex,
+                )
+                for reading in readings
             ],
         )
         self.connection.commit()

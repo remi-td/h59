@@ -97,6 +97,7 @@ Main commands:
 - `h59 report [device_id|nickname|address]`
 - `h59 db reset`
 - `h59 db path`
+- `h59 db merge-history <from_db>`
 - `h59 daemon status`
 - `h59 daemon stop`
 - `h59 device discover`
@@ -202,6 +203,19 @@ Behavior:
 - if the database exists, it is renamed to `archive_<YYYYMMDD-HHMISS>_h59.sqlite`
 - a new empty database is then created with the current schema
 - the archived database is kept on disk and must be deleted manually if no longer needed
+
+To recover older measurements from a previous database:
+
+```bash
+h59 db merge-history /path/to/older.sqlite
+```
+
+Behavior:
+- migrates only device measurement data
+- maps devices by `devices.address`
+- creates new target `syncs` rows with `source='db.merge_history'`
+- imports only rows older than the earliest timestamp already present in each corresponding target entity
+- is intended for historical backfill and recovery, not full database union
 
 Research notes are kept separately so the CLI software stays clean while the reverse-engineering work remains documented.
 

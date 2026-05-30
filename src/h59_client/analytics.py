@@ -17,6 +17,7 @@ DROP VIEW IF EXISTS analytic_heart_rate_intervals;
 DROP VIEW IF EXISTS analytic_activity_intervals;
 DROP VIEW IF EXISTS analytic_sleep_stage_intervals;
 DROP VIEW IF EXISTS analytic_blood_oxygen_intervals;
+DROP VIEW IF EXISTS analytic_blood_pressure_intervals;
 DROP VIEW IF EXISTS analytic_pressure_intervals;
 DROP VIEW IF EXISTS analytic_hrv_intervals;
 DROP VIEW IF EXISTS analytic_daily_steps;
@@ -145,6 +146,20 @@ SELECT
     bos.source_command,
     bos.raw_packet_hex
 FROM blood_oxygen_samples AS bos;
+
+CREATE VIEW IF NOT EXISTS analytic_blood_pressure_intervals AS
+SELECT
+    bpr.blood_pressure_reading_id AS source_id,
+    bpr.device_id,
+    bpr.sync_id,
+    bpr.timestamp AS valid_from,
+    strftime('%Y-%m-%dT%H:%M:%S+00:00', unixepoch(bpr.timestamp) + (5 * 60), 'unixepoch') AS valid_to,
+    bpr.systolic,
+    bpr.diastolic,
+    ROUND((bpr.systolic + (2.0 * bpr.diastolic)) / 3.0, 1) AS mean_arterial_pressure,
+    bpr.source_command,
+    bpr.raw_packet_hex
+FROM blood_pressure_readings AS bpr;
 
 CREATE VIEW IF NOT EXISTS analytic_pressure_intervals AS
 SELECT

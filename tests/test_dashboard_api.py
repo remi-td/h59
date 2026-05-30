@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "dashboard" / "api" / "src"))
 
 import h59_dashboard_api.payloads.today as today_payload_module  # noqa: E402
+import h59_dashboard_api.payloads.metrics as metrics_payload_module  # noqa: E402
 from h59_dashboard_api.config import Settings  # noqa: E402
 from h59_dashboard_api.main import create_app  # noqa: E402
 from h59_client.protocol import BatteryStatus  # noqa: E402
@@ -66,6 +67,10 @@ def _seed_db(path: Path) -> None:
         (device_id, sync_id, now.isoformat()),
     )
     db.connection.execute(
+        "INSERT INTO blood_pressure_readings(device_id, sync_id, timestamp, systolic, diastolic, source_command, raw_packet_hex) VALUES (?, ?, ?, 121, 79, 20, '')",
+        (device_id, sync_id, now.isoformat()),
+    )
+    db.connection.execute(
         "INSERT INTO pressure_samples(device_id, sync_id, timestamp, sample_index, value, interval_minutes, source_command, raw_packet_hex) VALUES (?, ?, ?, 0, 36, 30, 55, '')",
         (device_id, sync_id, now.isoformat()),
     )
@@ -77,9 +82,10 @@ def _seed_db(path: Path) -> None:
     db.close()
 
 
-def test_dashboard_api_today_and_health(tmp_path: Path) -> None:
+def test_dashboard_api_today_and_health(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "h59.sqlite"
     _seed_db(db_path)
+    monkeypatch.setattr(today_payload_module, "utc_now", lambda: datetime(2026, 5, 29, 12, 0, tzinfo=UTC))
     app = create_app(
         Settings(
             db_path=db_path,
@@ -103,12 +109,15 @@ def test_dashboard_api_today_and_health(tmp_path: Path) -> None:
     assert payload["time_context"]["query_day_boundary_timezone"] == "UTC"
     assert payload["device"]["battery_percent"] == 82
     card_ids = {card["id"] for card in payload["cards"]}
-    assert {"steps", "heart_rate", "sleep", "spo2", "hrv", "stress"}.issubset(card_ids)
+    assert {"steps", "heart_rate", "sleep", "spo2", "hrv", "stress", "blood_pressure"}.issubset(card_ids)
+    bp_card = next(card for card in payload["cards"] if card["id"] == "blood_pressure")
+    assert bp_card["display_value"] == "121/79 mmHg"
 
 
-def test_dashboard_api_metric_and_quality(tmp_path: Path) -> None:
+def test_dashboard_api_metric_and_quality(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "h59.sqlite"
     _seed_db(db_path)
+    monkeypatch.setattr(metrics_payload_module, "range_start", lambda _range_name: datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
     app = create_app(
         Settings(
             db_path=db_path,

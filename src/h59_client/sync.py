@@ -26,16 +26,20 @@ from h59_client.protocol import (
     CMD_START_REAL_TIME,
     READ_HEART_RATE_LOG_SETTINGS_PACKET,
     ActivityBlockParser,
+    BloodPressureReading,
     HeartRateDayParser,
+    HealthCheckSample,
     HrvHistoryParser,
     NoData,
     PressureHistoryParser,
     REALTIME_NAME_MAP,
+    RealTimeMetric,
     bigdata_request_packet,
     parse_battery,
     parse_bigdata_blood_oxygen,
     parse_bigdata_sleep,
     parse_capabilities,
+    parse_health_check_packet,
     parse_heart_rate_log_settings,
     parse_realtime_packet,
     read_heart_rate_packet,
@@ -162,6 +166,40 @@ async def _query_realtime(transport: PacketTransport, metric_name: str, *, sampl
         out.append((parse_realtime_packet(packet), packet.hex(), observed_at))
     await transport.send_packet(stop_realtime_packet(metric))
     return out
+
+
+async def _query_health_check(
+    transport: PacketTransport,
+    *,
+    timeout: float = 40.0,
+    idle_timeout: float = 5.0,
+) -> tuple[list[tuple[HealthCheckSample, str, str]], tuple[HealthCheckSample, str, str] | None]:
+    metric = RealTimeMetric.HEALTH_CHECK
+    await transport.send_packet(start_realtime_packet(metric))
+    out: list[tuple[HealthCheckSample, str, str]] = []
+    final_reading: tuple[HealthCheckSample, str, str] | None = None
+    started = asyncio.get_running_loop().time()
+    last_packet_at = started
+    try:
+        while asyncio.get_running_loop().time() - started < timeout:
+            remaining = min(idle_timeout, timeout - (asyncio.get_running_loop().time() - started))
+            if remaining <= 0:
+                break
+            try:
+                packet, observed_at = (await transport.read_command_packets(CMD_START_REAL_TIME, expected=1, timeout=remaining))[0]
+            except TimeoutError:
+                if out and asyncio.get_running_loop().time() - last_packet_at >= idle_timeout:
+                    break
+                continue
+            parsed = parse_health_check_packet(packet)
+            captured = (parsed, packet.hex(), observed_at)
+            out.append(captured)
+            last_packet_at = asyncio.get_running_loop().time()
+            if parsed.has_blood_pressure_result:
+                final_reading = captured
+        return out, final_reading
+    finally:
+        await transport.send_packet(stop_realtime_packet(metric))
 
 
 def determine_sync_dates(
@@ -381,6 +419,24 @@ async def sync_one_h59(
 
                 if realtime_metrics:
                     for metric_name in realtime_metrics:
+                        if metric_name == "health-check":
+                            samples, final_reading = await _query_health_check(transport)
+                            if final_reading is not None:
+                                sample, raw_packet_hex, observed_at = final_reading
+                                database.record_blood_pressure_readings(
+                                    device_id,
+                                    sync_id,
+                                    readings=[
+                                        BloodPressureReading(
+                                            timestamp=datetime.fromisoformat(observed_at),
+                                            systolic=int(sample.systolic),
+                                            diastolic=int(sample.diastolic),
+                                        )
+                                    ],
+                                    raw_packet_hex=raw_packet_hex,
+                                    source_command=CMD_START_REAL_TIME,
+                                )
+                            continue
                         samples = await _query_realtime(transport, metric_name, samples=realtime_samples)
                         if samples:
                             observed_at = samples[-1][2]

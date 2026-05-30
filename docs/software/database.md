@@ -49,6 +49,7 @@ Practical consequence:
 - `sleep_sessions`
 - `sleep_stage_samples`
 - `blood_oxygen_samples`
+- `blood_pressure_readings`
 - `pressure_samples`
 - `hrv_samples`
 
@@ -68,6 +69,7 @@ erDiagram
     devices ||--o{ sleep_sessions : has
     devices ||--o{ sleep_stage_samples : has
     devices ||--o{ blood_oxygen_samples : has
+    devices ||--o{ blood_pressure_readings : has
     devices ||--o{ pressure_samples : has
     devices ||--o{ hrv_samples : has
 
@@ -82,6 +84,7 @@ erDiagram
     syncs ||--o{ sleep_sessions : captures
     syncs ||--o{ sleep_stage_samples : captures
     syncs ||--o{ blood_oxygen_samples : captures
+    syncs ||--o{ blood_pressure_readings : captures
     syncs ||--o{ pressure_samples : captures
     syncs ||--o{ hrv_samples : captures
 
@@ -160,6 +163,14 @@ Historical SpO2 min/max sample pairs.
 Current note:
 - timing/header semantics are still provisional
 
+### `blood_pressure_readings`
+
+Paired systolic/diastolic blood-pressure readings.
+
+Current note:
+- the table exists as the correct local model for BP
+- the extraction path on this H59 is still under investigation
+
 ### `pressure_samples`
 
 Historical pressure or stress-like score samples.
@@ -183,6 +194,7 @@ Current uniqueness rules:
 - `sleep_sessions(device_id, source_command, raw_json)`
 - `sleep_stage_samples(sleep_session_id, sequence_index)`
 - `blood_oxygen_samples(device_id, timestamp, source_command)`
+- `blood_pressure_readings(device_id, timestamp, source_command)`
 - `pressure_samples(device_id, timestamp, source_command)`
 - `hrv_samples(device_id, timestamp, source_command)`
 

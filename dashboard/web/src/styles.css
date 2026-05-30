@@ -356,8 +356,11 @@ h1 {
   margin-top: 8px;
 }
 
-.trend-echart,
-.trend-echart > div {
+.trend-echart {
+  position: relative;
+}
+
+.trend-echart > div:first-child {
   width: 100% !important;
 }
 
@@ -401,6 +404,13 @@ h1 {
   margin-top: 12px;
   color: var(--ink-soft);
   font-size: 0.82rem;
+}
+
+.sleep-timeline-readout {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+  min-height: 1.2em;
 }
 
 .sleep-legend-item {

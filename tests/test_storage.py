@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from h59_client.protocol import (
     ActivityBlock,
     BatteryStatus,
+    BloodPressureReading,
     BloodOxygenHistory,
     BloodOxygenSample,
     HeartRateDay,
@@ -135,6 +136,19 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
         raw_packet_hex="bc2a...",
         source_command=42,
     )
+    db.record_blood_pressure_readings(
+        device_id,
+        sync_id,
+        readings=[
+            BloodPressureReading(
+                timestamp=datetime(2026, 5, 26, 9, 0, tzinfo=UTC),
+                systolic=121,
+                diastolic=79,
+            )
+        ],
+        raw_packet_hex="14...",
+        source_command=20,
+    )
     db.record_pressure_history(
         device_id,
         sync_id,
@@ -169,8 +183,11 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM sleep_stage_samples").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM blood_oxygen_samples").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM blood_pressure_readings").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM pressure_samples").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0] == 2
+    bp_row = conn.execute("SELECT systolic, diastolic FROM analytic_blood_pressure_intervals").fetchone()
+    assert tuple(bp_row) == (121, 79)
     assert conn.execute("SELECT last_seen_at FROM devices WHERE device_id=?", (device_id,)).fetchone()[0] == "2026-05-25T19:00:00+00:00"
 
     db.close()
@@ -193,6 +210,120 @@ def test_storage_returns_latest_sync_timestamp(tmp_path):
     assert latest == datetime.fromisoformat("2026-05-26T06:00:00+00:00")
 
     db.close()
+
+
+def test_merge_history_imports_only_older_measurements_by_device_address(tmp_path):
+    source_db = H59Database(tmp_path / "source.sqlite")
+    source_device_id = source_db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version="H59_V2.2",
+        fw_version="H59_FW",
+        last_seen_at="2026-05-25T19:00:00+00:00",
+    )
+    source_sync_id = source_db.create_sync(source_device_id, started_at="2026-05-25T19:00:00+00:00", source="test")
+    source_db.record_heart_rate_day(
+        source_device_id,
+        source_sync_id,
+        day=HeartRateDay(
+            heart_rates=[61, 62, 63],
+            timestamp=datetime(2026, 5, 24, 0, 0, tzinfo=UTC),
+            size=1,
+            index=3,
+            range=5,
+        ),
+        raw_packet_hex="15-source",
+    )
+    source_db.record_activity_blocks(
+        source_device_id,
+        source_sync_id,
+        blocks=[
+            ActivityBlock(year=2026, month=5, day=24, time_index=28, calories=100, steps=200, distance=300),
+        ],
+        raw_packet_hex="43-source",
+    )
+    source_db.record_sleep_sessions(
+        source_device_id,
+        source_sync_id,
+        reference=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=10,
+                sleep_start_minutes=1380,
+                sleep_end_minutes=360,
+                periods=[SleepPeriod(stage="light", minutes=120), SleepPeriod(stage="deep", minutes=120)],
+            )
+        ],
+        raw_packet_hex="bc27-source",
+        source_command=39,
+    )
+    source_db.finish_sync(source_sync_id, finished_at="2026-05-25T19:05:00+00:00")
+    source_db.close()
+
+    target_db = H59Database(tmp_path / "target.sqlite")
+    target_device_id = target_db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version="H59_V2.2",
+        fw_version="H59_FW",
+        last_seen_at="2026-05-26T19:00:00+00:00",
+    )
+    target_sync_id = target_db.create_sync(target_device_id, started_at="2026-05-26T19:00:00+00:00", source="test")
+    target_db.record_heart_rate_day(
+        target_device_id,
+        target_sync_id,
+        day=HeartRateDay(
+            heart_rates=[71, 72],
+            timestamp=datetime(2026, 5, 25, 0, 0, tzinfo=UTC),
+            size=1,
+            index=2,
+            range=5,
+        ),
+        raw_packet_hex="15-target",
+    )
+    target_db.record_activity_blocks(
+        target_device_id,
+        target_sync_id,
+        blocks=[
+            ActivityBlock(year=2026, month=5, day=25, time_index=28, calories=110, steps=210, distance=310),
+        ],
+        raw_packet_hex="43-target",
+    )
+    target_db.record_sleep_sessions(
+        target_device_id,
+        target_sync_id,
+        reference=datetime(2026, 5, 26, 12, 0, tzinfo=UTC),
+        sessions=[
+            SleepSession(
+                days_ago=1,
+                bytes_used=10,
+                sleep_start_minutes=1380,
+                sleep_end_minutes=360,
+                periods=[SleepPeriod(stage="light", minutes=130), SleepPeriod(stage="deep", minutes=110)],
+            )
+        ],
+        raw_packet_hex="bc27-target",
+        source_command=39,
+    )
+
+    summary = target_db.merge_history_from(tmp_path / "source.sqlite")
+    conn = target_db.connection
+    assert summary["imported_rows"] > 0
+    assert conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM heart_rates").fetchone()[0] == 5
+    assert conn.execute("SELECT COUNT(*) FROM sport_details").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 2
+    migration_sync = conn.execute(
+        "SELECT sync_id, source FROM syncs WHERE device_id=? AND source='db.merge_history' ORDER BY sync_id DESC LIMIT 1",
+        (target_device_id,),
+    ).fetchone()
+    assert migration_sync is not None
+    assert conn.execute("SELECT MIN(timestamp) FROM heart_rates WHERE device_id=?", (target_device_id,)).fetchone()[0] == "2026-05-24T00:00:00+00:00"
+    assert conn.execute("SELECT MIN(timestamp) FROM sport_details WHERE device_id=?", (target_device_id,)).fetchone()[0] == "2026-05-24T07:00:00+00:00"
+    target_db.close()
 
 
 def test_storage_allows_repeated_gatt_snapshots_for_same_device(tmp_path):

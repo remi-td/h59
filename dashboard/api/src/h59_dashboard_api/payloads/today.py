@@ -73,6 +73,16 @@ def today_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_pref
         """,
         (device_id, start_iso, end_iso),
     ).fetchone()
+    latest_blood_pressure = conn.execute(
+        """
+        SELECT systolic, diastolic, valid_from
+        FROM analytic_blood_pressure_intervals
+        WHERE device_id=? AND valid_from>=? AND valid_from<?
+        ORDER BY valid_from DESC
+        LIMIT 1
+        """,
+        (device_id, start_iso, end_iso),
+    ).fetchone()
     spo2_rows = conn.execute(
         """
         SELECT min_percent, max_percent, valid_from
@@ -228,12 +238,17 @@ def today_payload(conn: sqlite3.Connection, resolved: ResolvedDevice, *, is_pref
         ),
         MetricCard(
             id="blood_pressure",
-            title="Blood Pressure Estimate",
-            value=None,
+            title="Blood Pressure",
+            value=f"{int(latest_blood_pressure['systolic'])}/{int(latest_blood_pressure['diastolic'])}" if latest_blood_pressure else None,
             unit="mmHg",
             trust_class="estimated",
-            status="empty",
-            subtitle="Not currently captured from local H59 history",
+            status=resolved.freshness if latest_blood_pressure else "empty",
+            display_value=(
+                f"{int(latest_blood_pressure['systolic'])}/{int(latest_blood_pressure['diastolic'])} mmHg"
+                if latest_blood_pressure
+                else None
+            ),
+            subtitle="Systolic / diastolic" if latest_blood_pressure else "No local blood-pressure readings captured",
             trend_type="none",
         ),
         MetricCard(

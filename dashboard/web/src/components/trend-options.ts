@@ -1,6 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { MetricPoint, SleepSessionSummary } from "../api/types";
-import { formatShortDate } from "../lib/format";
+import { formatDurationMinutes, formatShortDate, formatSleepWindow } from "../lib/format";
 import { SLEEP_STAGE_COLORS } from "../lib/sleep-stage-colors";
 
 export const STAGE_ORDER = ["deep", "light", "rem", "awake", "unknown"] as const;
@@ -201,12 +201,16 @@ export function heartDistributionOption(points: MetricPoint[], slots: DaySlot[])
 
 export function sleepStageTrendOption(sessions: SleepSessionSummary[], slots: DaySlot[], xAxisLabel = "Night"): EChartsOption | null {
   const byDay = new Map<string, Record<string, number>>();
+  const sessionByDay = new Map<string, SleepSessionSummary>();
   for (const session of sessions) {
     const stamp = session.end_timestamp || session.start_timestamp;
     if (!stamp) {
       continue;
     }
     const key = stamp.slice(0, 10);
+    if (!sessionByDay.has(key)) {
+      sessionByDay.set(key, session);
+    }
     const bucket = byDay.get(key) ?? { deep: 0, light: 0, rem: 0, awake: 0, unknown: 0 };
     for (const stage of session.stages) {
       const name = STAGE_ORDER.includes(stage.stage as (typeof STAGE_ORDER)[number]) ? stage.stage : "unknown";
@@ -248,17 +252,32 @@ export function sleepStageTrendOption(sessions: SleepSessionSummary[], slots: Da
       backgroundColor: "var(--tooltip-background)",
       borderColor: "var(--tooltip-border)",
       textStyle: { color: "var(--ink)" },
+      confine: true,
+      extraCssText: "max-width: 280px; white-space: normal; box-shadow: 0 12px 28px rgba(31, 38, 34, 0.12);",
+      position: (point: number[], _params: unknown, _dom: unknown, _rect: unknown, size: { contentSize: number[]; viewSize: number[] }) => {
+        const [x, y] = point;
+        const [contentWidth, contentHeight] = size.contentSize;
+        const [viewWidth, viewHeight] = size.viewSize;
+        const left = Math.min(Math.max(12, x + 16), Math.max(12, viewWidth - contentWidth - 12));
+        const top = y > viewHeight / 2
+          ? Math.max(12, y - contentHeight - 16)
+          : Math.min(viewHeight - contentHeight - 12, y + 16);
+        return [left, top];
+      },
       formatter: (params: any) => {
         const items = Array.isArray(params) ? params : [params];
+        const slot = slots[Number(items[0]?.dataIndex ?? -1)];
+        const session = slot ? sessionByDay.get(slot.key) : null;
         const total = items.reduce((sum, item) => sum + Number(item.value || 0), 0);
         if (!total) {
           return `${items[0]?.axisValueLabel ?? ""}<br/>No sleep session`;
         }
         const details = items
           .filter((item) => Number(item.value) > 0)
-          .map((item) => `${item.marker}${item.seriesName}: ${item.value} min`)
+          .map((item) => `${item.marker}${item.seriesName}: ${formatDurationMinutes(Number(item.value))}`)
           .join("<br/>");
-        return `${items[0].axisValueLabel}<br/><strong>${Math.floor(total / 60)}h ${String(total % 60).padStart(2, "0")}m</strong><br/>${details}`;
+        const window = session ? `${formatSleepWindow(session.start_timestamp, session.end_timestamp)}<br/>` : "";
+        return `${items[0].axisValueLabel}<br/>${window}<strong>${formatDurationMinutes(total)}</strong><br/>${details}`;
       },
     },
     xAxis: {
@@ -308,7 +327,7 @@ export function latestSleepSummary(sessions: SleepSessionSummary[]): string | nu
   const total = latest.total_minutes ?? latest.stages.reduce((sum, stage) => sum + stage.minutes, 0);
   const details = STAGE_ORDER.map((stage) => {
     const minutes = latest.stages.filter((item) => item.stage === stage).reduce((sum, item) => sum + item.minutes, 0);
-    return minutes > 0 ? `${stage.toUpperCase()} ${minutes}m` : null;
+    return minutes > 0 ? `${stage.toUpperCase()} ${formatDurationMinutes(minutes)}` : null;
   }).filter(Boolean);
-  return `${formatShortDate(latest.end_timestamp || latest.start_timestamp || "")} · ${Math.floor(total / 60)}h ${String(total % 60).padStart(2, "0")}m${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  return `${formatShortDate(latest.end_timestamp || latest.start_timestamp || "")} · ${formatDurationMinutes(total)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
 }

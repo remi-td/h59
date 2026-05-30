@@ -26,6 +26,7 @@ REQUIRED_ANALYTIC_VIEWS = {
     "analytic_sleep_stage_intervals",
     "analytic_sleep_sessions_canonical",
     "analytic_blood_oxygen_intervals",
+    "analytic_blood_pressure_intervals",
     "analytic_pressure_intervals",
     "analytic_hrv_intervals",
     "analytic_daily_steps",
@@ -171,6 +172,8 @@ def latest_metric_day(conn: sqlite3.Connection, device_id: int) -> str:
             UNION ALL
             SELECT date(valid_from) AS day_value FROM analytic_blood_oxygen_intervals WHERE device_id=?
             UNION ALL
+            SELECT date(valid_from) AS day_value FROM analytic_blood_pressure_intervals WHERE device_id=?
+            UNION ALL
             SELECT date(valid_from) AS day_value FROM analytic_pressure_intervals WHERE device_id=?
             UNION ALL
             SELECT date(valid_from) AS day_value FROM analytic_hrv_intervals WHERE device_id=?
@@ -178,7 +181,7 @@ def latest_metric_day(conn: sqlite3.Connection, device_id: int) -> str:
             SELECT sleep_day AS day_value FROM analytic_daily_sleep WHERE device_id=?
         )
         """,
-        (device_id, device_id, device_id, device_id, device_id, device_id),
+        (device_id, device_id, device_id, device_id, device_id, device_id, device_id),
     ).fetchone()
     if row and row["latest_day"]:
         return str(row["latest_day"])

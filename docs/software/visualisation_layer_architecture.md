@@ -347,7 +347,7 @@ GET /api/data-quality?device_id=1&range=30d
     },
     {
       "id": "blood_pressure",
-      "title": "Blood Pressure Estimate",
+      "title": "Blood Pressure",
       "value": "118/78",
       "unit": "mmHg",
       "trust_class": "estimated"

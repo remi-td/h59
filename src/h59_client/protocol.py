@@ -500,6 +500,19 @@ class RealTimeSample:
     error_code: int = 0
 
 
+@dataclass
+class HealthCheckSample:
+    diastolic: int | None
+    systolic: int | None
+    heart_rate: int | None
+    cuff_pressure_tenths: int
+    error_code: int = 0
+
+    @property
+    def has_blood_pressure_result(self) -> bool:
+        return (self.diastolic or 0) > 0 and (self.systolic or 0) > 0
+
+
 def start_realtime_packet(metric: RealTimeMetric) -> bytearray:
     return make_packet(CMD_START_REAL_TIME, bytearray([metric, Action.START]))
 
@@ -514,6 +527,23 @@ def parse_realtime_packet(packet: bytearray) -> RealTimeSample:
     metric = RealTimeMetric(packet[1])
     error_code = packet[2]
     return RealTimeSample(metric=metric.name.lower(), value=packet[3], error_code=error_code)
+
+
+def parse_health_check_packet(packet: bytearray) -> HealthCheckSample:
+    if len(packet) != 16 or packet[0] != CMD_START_REAL_TIME or packet[1] != RealTimeMetric.HEALTH_CHECK:
+        raise ValueError("invalid health-check packet")
+    error_code = packet[2]
+    diastolic = packet[3] or None
+    systolic = packet[4] or None
+    heart_rate = packet[5] or None
+    cuff_pressure_tenths = packet[6] | (packet[7] << 8)
+    return HealthCheckSample(
+        diastolic=diastolic,
+        systolic=systolic,
+        heart_rate=heart_rate,
+        cuff_pressure_tenths=cuff_pressure_tenths,
+        error_code=error_code,
+    )
 
 
 def bigdata_request_packet(data_id: int) -> bytes:
@@ -641,6 +671,25 @@ def parse_bigdata_blood_oxygen(payload: bytes) -> BloodOxygenHistory:
     for index in range(0, len(sample_bytes) - 1, 2):
         samples.append(BloodOxygenSample(min_percent=sample_bytes[index], max_percent=sample_bytes[index + 1]))
     return BloodOxygenHistory(unknown_flag=unknown_flag, samples=samples)
+
+
+@dataclass
+class BloodPressureReading:
+    timestamp: datetime
+    diastolic: int
+    systolic: int
+
+
+def parse_blood_pressure_packet(packet: bytearray) -> BloodPressureReading:
+    command_id = packet[0] & 127
+    if len(packet) != 16 or command_id != 20:
+        raise ValueError("invalid blood pressure packet")
+    ts = struct.unpack_from("<I", packet, offset=1)[0]
+    return BloodPressureReading(
+        timestamp=datetime.fromtimestamp(ts, timezone.utc),
+        diastolic=packet[5],
+        systolic=packet[6],
+    )
 
 
 def to_json(value: Any) -> str:

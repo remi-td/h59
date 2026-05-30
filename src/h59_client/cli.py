@@ -787,6 +787,35 @@ def handle_db_path(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_db_merge_history(args: argparse.Namespace) -> int:
+    target_database = H59Database(args.db)
+    try:
+        summary = target_database.merge_history_from(args.from_db)
+    finally:
+        target_database.close()
+
+    print(f"Merged history from {summary['source_db']} into {summary['target_db']}")
+    print(f"Migration source code: {summary['migration_source']}")
+    print(f"Imported rows: {summary['imported_rows']}")
+    if not summary["devices"]:
+        print("No historic measurement rows were eligible for import.")
+        return 0
+
+    for device in summary["devices"]:
+        print(
+            "Device {target_device_id} ({address}) -> sync_id={sync_id}, imported_rows={imported_rows}".format(
+                target_device_id=device["target_device_id"],
+                address=device["address"],
+                sync_id=device["sync_id"],
+                imported_rows=device["imported_rows"],
+            )
+        )
+        for entity_name, count in sorted(device["entities"].items()):
+            if count:
+                print(f"  {entity_name}: {count}")
+    return 0
+
+
 def add_db_argument(parser: argparse.ArgumentParser) -> None:
     db_default = str(default_db_path())
     parser.add_argument(
@@ -935,6 +964,11 @@ def build_parser() -> argparse.ArgumentParser:
     db_path_parser = db_subparsers.add_parser("path", help="print the effective SQLite database path")
     add_db_argument(db_path_parser)
     db_path_parser.set_defaults(handler=handle_db_path)
+
+    db_merge_history = db_subparsers.add_parser("merge-history", help="load older measurement history from another SQLite database")
+    add_db_argument(db_merge_history)
+    db_merge_history.add_argument("from_db", help="source SQLite database path to merge historic measurements from")
+    db_merge_history.set_defaults(handler=handle_db_merge_history)
 
     config_parser = subparsers.add_parser("config", help="inspect or modify CLI configuration")
     config_subparsers = config_parser.add_subparsers(dest="config_command", required=True)

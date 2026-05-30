@@ -11,6 +11,7 @@ from h59_client.protocol import (
     parse_bigdata_sleep,
     parse_battery,
     parse_capabilities,
+    parse_health_check_packet,
     parse_heart_rate_log_settings,
     parse_realtime_packet,
     read_hrv_history_packet,
@@ -114,6 +115,24 @@ def test_parse_realtime_packet():
     parsed = parse_realtime_packet(bytearray.fromhex("6903000000000000000000000000006c"))
     assert parsed.metric == "spo2"
     assert parsed.value == 0
+
+
+def test_parse_health_check_packet_interprets_final_bp_fields():
+    parsed = parse_health_check_packet(bytearray.fromhex("690500436f48a9030000000000000014"))
+    assert parsed.diastolic == 67
+    assert parsed.systolic == 111
+    assert parsed.heart_rate == 72
+    assert parsed.cuff_pressure_tenths == 937
+    assert parsed.has_blood_pressure_result is True
+
+
+def test_parse_health_check_packet_without_final_result():
+    parsed = parse_health_check_packet(bytearray.fromhex("690500000000a2030000000000000013"))
+    assert parsed.diastolic is None
+    assert parsed.systolic is None
+    assert parsed.heart_rate is None
+    assert parsed.cuff_pressure_tenths == 930
+    assert parsed.has_blood_pressure_result is False
 
 
 def test_set_time_packet_preserves_provided_wall_time(monkeypatch):

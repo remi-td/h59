@@ -26,6 +26,7 @@ def summary_from_db(conn):
         "sleep_sessions",
         "sleep_stage_samples",
         "blood_oxygen_samples",
+        "blood_pressure_readings",
         "pressure_samples",
         "hrv_samples",
     ):

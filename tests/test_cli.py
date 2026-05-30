@@ -166,6 +166,15 @@ def test_build_parser_supports_db_path_command():
     assert args.db == "data/test.sqlite"
 
 
+def test_build_parser_supports_db_merge_history_command():
+    parser = build_parser()
+    args = parser.parse_args(["db", "merge-history", "--db", "data/target.sqlite", "data/source.sqlite"])
+    assert args.command == "db"
+    assert args.db_command == "merge-history"
+    assert args.db == "data/target.sqlite"
+    assert args.from_db == "data/source.sqlite"
+
+
 def test_build_parser_supports_report_command():
     parser = build_parser()
     args = parser.parse_args(["report", "left-wrist", "--db", "data/test.sqlite", "--date", "2026-05-27", "--output", "report.md"])

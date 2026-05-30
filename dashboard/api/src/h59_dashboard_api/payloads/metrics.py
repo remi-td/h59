@@ -52,14 +52,40 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
         )
 
     if metric == "blood-pressure":
+        rows = conn.execute(
+            """
+            SELECT valid_from, systolic, diastolic
+            FROM analytic_blood_pressure_intervals
+            WHERE device_id=? AND valid_from>=?
+            ORDER BY valid_from ASC
+            """,
+            (device_id, start_iso),
+        ).fetchall()
+        points = [
+            MetricPoint(
+                timestamp=row["valid_from"],
+                value=int(row["systolic"]),
+                min_value=int(row["diastolic"]),
+                max_value=int(row["systolic"]),
+                label=f"{int(row['systolic'])}/{int(row['diastolic'])}",
+            )
+            for row in rows
+        ]
         return MetricSeriesResponse(
             metric=metric,
-            label="Blood Pressure Estimate",
+            label="Blood Pressure",
             unit="mmHg",
             trust_class="estimated",
             range=range_name,
-            available=False,
-            note="Historical blood-pressure extraction is not currently proven for this device.",
+            available=bool(points),
+            points=points,
+            latest_value=int(rows[-1]["systolic"]) if rows else None,
+            summary=summary([float(row["systolic"]) for row in rows]) if rows else None,
+            note=(
+                None
+                if rows
+                else "No local systolic/diastolic readings are currently stored for this device."
+            ),
             time_context=time_context(),
         )
 

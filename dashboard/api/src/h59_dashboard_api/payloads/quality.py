@@ -18,6 +18,7 @@ def data_quality_payload(conn: sqlite3.Connection, resolved: ResolvedDevice) -> 
         "heart_rate": int(conn.execute("SELECT COUNT(*) FROM analytic_heart_rate_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
         "activity": int(conn.execute("SELECT COUNT(*) FROM analytic_activity_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
         "spo2": int(conn.execute("SELECT COUNT(*) FROM analytic_blood_oxygen_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
+        "blood_pressure": int(conn.execute("SELECT COUNT(*) FROM analytic_blood_pressure_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
         "stress": int(conn.execute("SELECT COUNT(*) FROM analytic_pressure_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
         "hrv": int(conn.execute("SELECT COUNT(*) FROM analytic_hrv_intervals WHERE device_id=? AND valid_from>=? AND valid_from<?", (device_id, start_iso, end_iso)).fetchone()[0]),
     }
