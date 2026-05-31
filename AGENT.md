@@ -25,6 +25,7 @@ The two product goals are:
 3. Do not reintroduce tracked runtime data, captures, or personal device identifiers.
 4. Preserve UTC-only timestamp storage semantics.
 5. Preserve raw protocol evidence when adding new decoders.
+6. Keep `SECURITY.md` and `PRIVACY.md` aligned with repository practice.
 
 ## Timestamp Policy
 
@@ -43,6 +44,12 @@ Timezone conversion belongs in reporting and dashboard layers.
 - Replace real device identifiers in examples with generic placeholders.
 - Do not commit data from `data/`, `captures/`, `traces/`, or `misc/`.
 - Treat vendor-estimated health metrics as non-medical unless proven otherwise.
+- Prefer sharing the git repository rather than the full working tree.
+- Clean generated runtime/build directories before external review when practical.
+
+Reference documents:
+- `SECURITY.md`
+- `PRIVACY.md`
 
 ## Development Workflow
 

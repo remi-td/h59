@@ -223,6 +223,80 @@ def test_storage_returns_latest_sync_timestamp(tmp_path):
     db.close()
 
 
+def test_storage_migrates_legacy_device_and_realtime_schema(tmp_path):
+    db_path = tmp_path / "legacy.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE devices (
+            device_id INTEGER PRIMARY KEY,
+            address TEXT NOT NULL UNIQUE,
+            name TEXT,
+            advertisement_json TEXT,
+            hw_version TEXT,
+            fw_version TEXT,
+            last_seen_at TEXT
+        );
+        CREATE TABLE syncs (
+            sync_id INTEGER PRIMARY KEY,
+            comment TEXT,
+            device_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            finished_at TEXT,
+            source TEXT
+        );
+        CREATE TABLE realtime_samples (
+            realtime_sample_id INTEGER PRIMARY KEY,
+            device_id INTEGER NOT NULL,
+            sync_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            error_code INTEGER NOT NULL DEFAULT 0,
+            raw_packet_hex TEXT
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO devices(device_id, address, name, advertisement_json, hw_version, fw_version, last_seen_at)
+        VALUES (1, 'AA-BB', 'H59_DEMO', NULL, NULL, NULL, '2026-05-25T19:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO syncs(sync_id, device_id, timestamp, source)
+        VALUES (1, 1, '2026-05-25T19:00:00+00:00', 'test')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO realtime_samples(realtime_sample_id, device_id, sync_id, timestamp, metric, value, error_code, raw_packet_hex)
+        VALUES (1, 1, 1, '2026-05-25T19:00:01+00:00', 'spo2', 97, 0, '690300...')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = H59Database(db_path)
+    columns = {row["name"] for row in db.connection.execute("PRAGMA table_info(devices)").fetchall()}
+    assert "nickname" in columns
+    realtime_columns = {row["name"] for row in db.connection.execute("PRAGMA table_info(realtime_samples)").fetchall()}
+    assert {"metric_code_id", "value_numeric", "value_text", "source_command"} <= realtime_columns
+    row = db.connection.execute(
+        """
+        SELECT rs.value_numeric, rs.source_command, mc.metric_code
+        FROM realtime_samples AS rs
+        JOIN metric_codes AS mc
+          ON mc.metric_code_id = rs.metric_code_id
+        WHERE rs.realtime_sample_id=1
+        """
+    ).fetchone()
+    assert tuple(row) == (97.0, 105, "spo2")
+    assert db.list_devices()[0]["address"] == "AA-BB"
+    db.close()
+
+
 def test_merge_history_imports_only_older_measurements_by_device_address(tmp_path):
     source_db = H59Database(tmp_path / "source.sqlite")
     source_device_id = source_db.upsert_device(

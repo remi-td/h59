@@ -256,6 +256,11 @@ Behavior:
 
 Research notes are kept separately so the CLI software stays clean while the reverse-engineering work remains documented.
 
+Repository hygiene:
+- share the git repository rather than the whole working tree
+- keep local runtime data in ignored directories such as `data/` and `misc/artifacts/`
+- review [SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md) before publishing captures, screenshots, or databases
+
 ## Documentation
 
 Software documentation:
@@ -277,6 +282,8 @@ Visualization:
 
 Contributor guidance:
 - [AGENT.md](AGENT.md)
+- [Security Policy](SECURITY.md)
+- [Privacy Notes](PRIVACY.md)
 
 ## Repository Layout
 

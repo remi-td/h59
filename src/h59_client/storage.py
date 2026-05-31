@@ -360,12 +360,6 @@ CREATE TABLE IF NOT EXISTS hrv_samples (
     FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_nickname_unique
-ON devices(nickname)
-WHERE nickname IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_realtime_samples_metric_code_timestamp
-ON realtime_samples(metric_code_id, timestamp);
 """
 
 
