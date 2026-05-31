@@ -3,8 +3,8 @@ import { useSleep } from "../api/hooks";
 import type { SleepSessionSummary } from "../api/types";
 import { SleepTimeline } from "../components/SleepTimeline";
 import { TrendEChart } from "../components/TrendEChart";
-import { latestSleepSummary, rollingDaySlots, sleepStageTrendOption } from "../components/trend-options";
-import { formatDateTime, formatDurationMinutes, formatSleepWindow } from "../lib/format";
+import { latestSleepSummary, rollingLocalDaySlots, sleepStageTrendOption } from "../components/trend-options";
+import { formatDateTime, formatDurationMinutes, formatSleepWindow, localDateKey } from "../lib/format";
 
 function sessionKey(session: SleepSessionSummary): string {
   return `${session.start_timestamp || "unknown"}-${session.end_timestamp || "unknown"}`;
@@ -12,7 +12,7 @@ function sessionKey(session: SleepSessionSummary): string {
 
 function sameNightKey(session: SleepSessionSummary): string | null {
   const stamp = session.end_timestamp || session.start_timestamp;
-  return stamp ? stamp.slice(0, 10) : null;
+  return localDateKey(stamp);
 }
 
 export function Sleep({ device }: { device: string }) {
@@ -27,11 +27,11 @@ export function Sleep({ device }: { device: string }) {
     }
   }, [data?.latest_session]);
 
-  const endDate = useMemo(() => {
+  const endTimestamp = useMemo(() => {
     const last = data?.sessions[0];
-    return (last?.end_timestamp || last?.start_timestamp || null)?.slice(0, 10) ?? null;
+    return last?.end_timestamp || last?.start_timestamp || null;
   }, [data]);
-  const slots = useMemo(() => rollingDaySlots(endDate, 14), [endDate]);
+  const slots = useMemo(() => rollingLocalDaySlots(endTimestamp, 14), [endTimestamp]);
   const option = useMemo(() => sleepStageTrendOption(data?.sessions || [], slots), [data, slots]);
 
   const selectedSession =

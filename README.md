@@ -125,6 +125,43 @@ Incremental sync behavior:
 - routine sync sets the bracelet clock as part of the capability handshake
 - the default bracelet clock mode is `utc`
 
+Realtime mode:
+- `h59 realtime <selector>` is the active live-measurement command
+- `sync` is for historical capture and synchronization
+- `realtime` starts one live measurement at a time, collects packets, stores supported observations, and then stops the measurement
+- requested realtime metrics are run sequentially on one BLE session, not in parallel
+- realtime packets do not currently expose a trustworthy measurement timestamp, so they are timestamped with host receipt time
+- `health-check` is currently the only proven path for capturing a finished blood-pressure reading on this H59
+- realtime observations are stored in `realtime_samples` and classified through `metric_codes`
+- analytics may denormalize selected realtime observations, such as health-check systolic/diastolic pairs, into consumer-facing metric views
+- by default, `health-check` auto-stops using the current packet/idle heuristic
+- `h59 realtime <selector>` with no metric runs all known realtime metrics sequentially
+- the default no-metric behavior is therefore: try every known realtime metric, one after another
+- with no `--time`, realtime runs interactively and waits for Enter before stopping the current metric
+- use `--time <duration>` or `-t <duration>` to keep the current metric active for a fixed window
+
+Example:
+
+```bash
+h59 realtime left-wrist health-check
+```
+
+```bash
+h59 realtime left-wrist health-check --time 30s
+```
+
+```bash
+h59 realtime left-wrist
+```
+
+This:
+- connects to the bracelet
+- starts the requested live measurement workflow
+- if no metric is specified, iterates through all known realtime metrics sequentially
+- keeps the workflow active according to the selected stop mode
+- stores the resulting live observations in `realtime_samples`
+- lets analytics derive a paired systolic/diastolic blood-pressure reading from those live observations
+
 Clock mode:
 - by default, `h59-local` writes `UTC` to the bracelet and stores all backend timestamps in UTC
 - you can override a single command with `--device-clock local`

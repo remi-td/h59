@@ -1,6 +1,6 @@
 import type { EChartsOption } from "echarts";
 import type { MetricPoint, SleepSessionSummary } from "../api/types";
-import { formatDurationMinutes, formatShortDate, formatSleepWindow } from "../lib/format";
+import { formatDurationMinutes, formatShortDate, formatSleepWindow, localDateKey } from "../lib/format";
 import { SLEEP_STAGE_COLORS } from "../lib/sleep-stage-colors";
 
 export const STAGE_ORDER = ["deep", "light", "rem", "awake", "unknown"] as const;
@@ -30,6 +30,29 @@ export function rollingDaySlots(endDate: string | null, days: number): DaySlot[]
       key,
       timestamp: `${key}T00:00:00+00:00`,
       label: formatShortDate(`${key}T00:00:00+00:00`),
+    };
+  });
+}
+
+export function rollingLocalDaySlots(endTimestamp: string | null | undefined, days: number): DaySlot[] {
+  const anchorSource = endTimestamp ? new Date(endTimestamp) : new Date();
+  const anchor = new Date(
+    anchorSource.getFullYear(),
+    anchorSource.getMonth(),
+    anchorSource.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+  return Array.from({ length: days }, (_, index) => {
+    const value = new Date(anchor);
+    value.setDate(anchor.getDate() - (days - 1 - index));
+    const key = `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    return {
+      key,
+      timestamp: value.toISOString(),
+      label: formatShortDate(value.toISOString()),
     };
   });
 }
@@ -207,7 +230,10 @@ export function sleepStageTrendOption(sessions: SleepSessionSummary[], slots: Da
     if (!stamp) {
       continue;
     }
-    const key = stamp.slice(0, 10);
+    const key = localDateKey(stamp);
+    if (!key) {
+      continue;
+    }
     if (!sessionByDay.has(key)) {
       sessionByDay.set(key, session);
     }

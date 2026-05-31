@@ -10,6 +10,14 @@ function parseTimestamp(value: string | null | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+export function localDateKey(value: string | null | undefined): string | null {
+  const date = parseTimestamp(value);
+  if (!date) {
+    return null;
+  }
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   const date = parseTimestamp(value);
   if (!date) {

@@ -16,6 +16,7 @@ def summary_from_db(conn):
         "database_metadata",
         "devices",
         "syncs",
+        "metric_codes",
         "heart_rates",
         "sport_details",
         "battery_samples",

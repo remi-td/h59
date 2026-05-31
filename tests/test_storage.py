@@ -15,7 +15,7 @@ from h59_client.protocol import (
     SleepPeriod,
     SleepSession,
 )
-from h59_client.storage import H59Database, utc_text
+from h59_client.storage import H59Database, RealtimeObservation, utc_text
 
 
 def test_storage_records_raw_and_decoded_data(tmp_path):
@@ -177,6 +177,7 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM battery_samples").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM heart_rate_settings").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM capability_snapshots").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM metric_codes").fetchone()[0] >= 1
     assert conn.execute("SELECT COUNT(*) FROM sport_details").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM heart_rates").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM realtime_samples").fetchone()[0] == 1
@@ -188,6 +189,16 @@ def test_storage_records_raw_and_decoded_data(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM hrv_samples").fetchone()[0] == 2
     bp_row = conn.execute("SELECT systolic, diastolic FROM analytic_blood_pressure_intervals").fetchone()
     assert tuple(bp_row) == (121, 79)
+    realtime_row = conn.execute(
+        """
+        SELECT mc.metric_code, rs.value_numeric, rs.source_command
+        FROM realtime_samples AS rs
+        JOIN metric_codes AS mc
+          ON mc.metric_code_id = rs.metric_code_id
+        LIMIT 1
+        """
+    ).fetchone()
+    assert tuple(realtime_row) == ("spo2", 0.0, 105)
     assert conn.execute("SELECT last_seen_at FROM devices WHERE device_id=?", (device_id,)).fetchone()[0] == "2026-05-25T19:00:00+00:00"
 
     db.close()
@@ -324,6 +335,59 @@ def test_merge_history_imports_only_older_measurements_by_device_address(tmp_pat
     assert conn.execute("SELECT MIN(timestamp) FROM heart_rates WHERE device_id=?", (target_device_id,)).fetchone()[0] == "2026-05-24T00:00:00+00:00"
     assert conn.execute("SELECT MIN(timestamp) FROM sport_details WHERE device_id=?", (target_device_id,)).fetchone()[0] == "2026-05-24T07:00:00+00:00"
     target_db.close()
+
+
+def test_analytic_blood_pressure_intervals_include_realtime_health_check_rows(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-31T08:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-31T08:00:00+00:00", source="test")
+    observed_at = datetime(2026, 5, 31, 8, 5, tzinfo=UTC)
+    db.record_realtime_observations(
+        device_id,
+        sync_id,
+        observations=[
+            RealtimeObservation(
+                metric_code="health-check.diastolic",
+                timestamp=observed_at,
+                value_numeric=67,
+                raw_packet_hex="690500436f48a9030000000000000014",
+                source_command=105,
+            ),
+            RealtimeObservation(
+                metric_code="health-check.systolic",
+                timestamp=observed_at,
+                value_numeric=111,
+                raw_packet_hex="690500436f48a9030000000000000014",
+                source_command=105,
+            ),
+            RealtimeObservation(
+                metric_code="health-check.heart-rate",
+                timestamp=observed_at,
+                value_numeric=72,
+                raw_packet_hex="690500436f48a9030000000000000014",
+                source_command=105,
+            ),
+        ],
+    )
+    row = db.connection.execute(
+        """
+        SELECT systolic, diastolic
+        FROM analytic_blood_pressure_intervals
+        WHERE device_id=?
+        ORDER BY valid_from DESC
+        LIMIT 1
+        """,
+        (device_id,),
+    ).fetchone()
+    assert tuple(row) == (111, 67)
+    db.close()
 
 
 def test_storage_allows_repeated_gatt_snapshots_for_same_device(tmp_path):

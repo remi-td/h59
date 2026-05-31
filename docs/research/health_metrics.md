@@ -23,12 +23,13 @@ What is now proven:
 - historical blood oxygen is available
 - historical pressure/stress-like data is available
 - historical HRV data is available
+- active blood-pressure measurement capture is available
 - older-than-today pressure history is available
 - older-than-today HRV history is available
 - a fresh 7-day backfill query recovered all available history back to the device's first-use date
 
 What remains unresolved:
-- historical blood pressure
+- historical blood-pressure backfill
 
 ## Findings
 
@@ -65,6 +66,8 @@ Assessment:
 Result:
 - UART command `0x37` returned a valid historical split response
 - the values look like a vendor score series rather than a raw measurement
+- across the captured databases, `pressure_samples` stay in a narrow `21..65` range at a fixed `30`-minute cadence, which is consistent with a stress-like score and not with systolic/diastolic BP
+- the device capability response exposes `support_pressure` and `support_blood_pressure` as separate flags, which strongly suggests that this historical `0x37` stream is not the blood-pressure feature
 - live probing on 2026-05-27 showed that the first request byte is a selector:
   - `0` returns a partial current-day series
   - `1` and `2` return fuller older-day series
@@ -99,16 +102,32 @@ Assessment:
 
 Result:
 - capability flags and settings indicate support
-- the currently tested realtime path did not produce usable values
+- the direct `0x69 / dataType=2` realtime path did not produce usable systolic/diastolic values
 - direct timestamped `0x14` historical probes produced no responses during the 2026-05-27 live test
 - `0x69` data requests for blood pressure only acknowledged with zero-valued `0x69` responses
-- a fresh live probe on 2026-05-30 still produced no `cmd 20` blood-pressure history packets and no usable `dataType=2` realtime payloads
-- the `HealthCheck` request path (`0x69`, `dataType=5`) did produce repeated non-zero packets late in the measurement window, but not yet in a decoded systolic/diastolic form
+- a fresh live probe on 2026-05-30 still produced no `cmd 20` blood-pressure history packets
+- a full review of the `raw_packets` captured by normal `sync` on 2026-05-31 showed only these historical command ids:
+  - `1`, `3`, `21`, `22`, `39`, `42`, `47`, `55`, `57`, `67`
+- the only unmapped historical response was a fixed one-packet `0x2f` reply (`2ff40000000000000000000000000023`) once per sync; it carries no timestamped series structure and does not resemble paired BP values
+- no captured database, including archived pre-reset databases, contains any `command_id=20` raw packet at all
+- a fresh live probe on 2026-05-30 confirmed that `0x69 / dataType=2` exposes only a live cuff-pressure-like value in bytes `6..7`
+- a fresh live probe on 2026-05-30 confirmed that `0x69 / dataType=5` (`HealthCheck`) emits the final blood-pressure result near the end of the measurement window
+- decoded `HealthCheck` packet layout:
+  - byte `3`: diastolic
+  - byte `4`: systolic
+  - byte `5`: heart rate
+  - bytes `6..7`: live cuff-pressure-like value in tenths
+- example final packet captured live:
+  - `690500436f48a9030000000000000014`
+  - decoded as `diastolic=67`, `systolic=111`, `heart_rate=72`, `cuff_pressure_tenths=937`
+- a live end-to-end sync on 2026-05-30 with `--realtime health-check` persisted realtime observations that can be denormalized into a paired BP reading
 
 Assessment:
-- blood pressure support is still unresolved
-- a different path likely exists, and `HealthCheck` is now a stronger candidate than `dataType=2`
-- the local data model should preserve separate systolic and diastolic values once that path is decoded
+- active blood-pressure measurement is now proven and decoded through `HealthCheck`
+- the local data model now stores separate systolic and diastolic values
+- the direct `dataType=2` path should be treated as a lower-level cuff-pressure stream, not as a finished BP reading
+- the normal historical sync payload currently shows no hidden paired-BP stream waiting to be decoded
+- historical blood-pressure backfill is still unresolved
 
 ### History Retention and Gap Recovery
 
@@ -165,6 +184,6 @@ Sleep is narrower than pressure and HRV:
 2. Iterate selectors during backfill and incremental sync until the device returns `0xFF` no-data.
 3. Keep the secondary Big Data transport for sleep and blood oxygen.
 4. Refine the HRV decoder to 16-bit sample parsing and trim trailing empty slots correctly.
-5. Investigate historical blood pressure separately.
+5. Investigate historical blood pressure separately from the active `HealthCheck` measurement path.
 6. Reconcile the current sleep parser with the older probe parser and revalidate `days_ago` / `bytes_used` semantics.
 7. Check whether the Big Data sleep request supports a history selector or alternate request shape for older nights.

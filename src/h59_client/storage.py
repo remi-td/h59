@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from h59_client.analytics import ensure_analytic_views
 from h59_client.protocol import (
+    CMD_START_REAL_TIME,
     ActivityBlock,
     BatteryStatus,
     BloodPressureReading,
@@ -22,6 +24,89 @@ from h59_client.protocol import (
     SleepSession,
     to_json,
 )
+
+
+@dataclass(frozen=True)
+class RealtimeObservation:
+    metric_code: str
+    timestamp: str | datetime
+    value_numeric: float | int | None = None
+    value_text: str | None = None
+    error_code: int = 0
+    raw_packet_hex: str | None = None
+    source_command: int | None = None
+    metric_label: str | None = None
+    unit: str | None = None
+    description: str | None = None
+
+
+REALTIME_METRIC_CODE_SEEDS: dict[str, dict[str, str | None]] = {
+    "heart-rate": {
+        "label": "Heart rate",
+        "unit": "bpm",
+        "description": "Realtime heart-rate sample requested from the device.",
+    },
+    "blood-pressure": {
+        "label": "Blood pressure stream",
+        "unit": None,
+        "description": "Opaque realtime stream advertised as blood pressure by the device family.",
+    },
+    "spo2": {
+        "label": "Blood oxygen",
+        "unit": "%",
+        "description": "Realtime blood-oxygen sample requested from the device.",
+    },
+    "fatigue": {
+        "label": "Fatigue",
+        "unit": None,
+        "description": "Realtime fatigue-like vendor metric.",
+    },
+    "health-check": {
+        "label": "Health check",
+        "unit": None,
+        "description": "Realtime one-key health-check workflow sample.",
+    },
+    "health-check.diastolic": {
+        "label": "Health check diastolic",
+        "unit": "mmHg",
+        "description": "Diastolic blood-pressure result inferred from a health-check packet.",
+    },
+    "health-check.systolic": {
+        "label": "Health check systolic",
+        "unit": "mmHg",
+        "description": "Systolic blood-pressure result inferred from a health-check packet.",
+    },
+    "health-check.heart-rate": {
+        "label": "Health check heart rate",
+        "unit": "bpm",
+        "description": "Heart-rate result inferred from a health-check packet.",
+    },
+    "health-check.cuff-pressure-tenths": {
+        "label": "Health check cuff pressure",
+        "unit": "tenths",
+        "description": "Opaque live cuff-pressure-like value emitted during a health-check workflow.",
+    },
+    "ecg": {
+        "label": "ECG",
+        "unit": None,
+        "description": "Realtime ECG-like stream exposed by the device family.",
+    },
+    "pressure": {
+        "label": "Pressure / stress-like",
+        "unit": None,
+        "description": "Realtime pressure or stress-like vendor score.",
+    },
+    "blood-sugar": {
+        "label": "Blood sugar",
+        "unit": None,
+        "description": "Realtime blood-sugar-like vendor metric.",
+    },
+    "hrv": {
+        "label": "HRV",
+        "unit": "ms",
+        "description": "Realtime HRV-like vendor metric.",
+    },
+}
 
 
 SCHEMA = """
@@ -116,6 +201,14 @@ CREATE TABLE IF NOT EXISTS capability_snapshots (
     FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
 );
 
+CREATE TABLE IF NOT EXISTS metric_codes (
+    metric_code_id INTEGER PRIMARY KEY,
+    metric_code TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    unit TEXT,
+    description TEXT
+);
+
 CREATE TABLE IF NOT EXISTS realtime_samples (
     realtime_sample_id INTEGER PRIMARY KEY,
     device_id INTEGER NOT NULL,
@@ -124,7 +217,12 @@ CREATE TABLE IF NOT EXISTS realtime_samples (
     metric TEXT NOT NULL,
     value INTEGER NOT NULL,
     error_code INTEGER NOT NULL DEFAULT 0,
+    metric_code_id INTEGER,
+    value_numeric REAL,
+    value_text TEXT,
+    source_command INTEGER,
     raw_packet_hex TEXT,
+    FOREIGN KEY(metric_code_id) REFERENCES metric_codes(metric_code_id),
     FOREIGN KEY(device_id) REFERENCES devices(device_id),
     FOREIGN KEY(sync_id) REFERENCES syncs(sync_id)
 );
@@ -265,6 +363,9 @@ CREATE TABLE IF NOT EXISTS hrv_samples (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_nickname_unique
 ON devices(nickname)
 WHERE nickname IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_realtime_samples_metric_code_timestamp
+ON realtime_samples(metric_code_id, timestamp);
 """
 
 
@@ -318,8 +419,20 @@ MIGRATABLE_TIMESTAMP_TABLES: dict[str, dict[str, Any]] = {
         "timestamp_column": "timestamp",
         "select_columns": ["timestamp", "metric", "value", "error_code", "raw_packet_hex"],
         "insert_sql": """
-            INSERT INTO realtime_samples(device_id, sync_id, timestamp, metric, value, error_code, raw_packet_hex)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO realtime_samples(
+                device_id,
+                sync_id,
+                timestamp,
+                metric,
+                value,
+                error_code,
+                metric_code_id,
+                value_numeric,
+                value_text,
+                source_command,
+                raw_packet_hex
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
     },
     "blood_oxygen_samples": {
@@ -391,6 +504,10 @@ class H59Database:
         ).fetchone()
         return row is not None
 
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
     def _write_metadata_defaults(self) -> None:
         self.connection.executemany(
             """
@@ -415,6 +532,107 @@ class H59Database:
             WHERE nickname IS NOT NULL
             """
         )
+        realtime_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(realtime_samples)").fetchall()}
+        if "metric_code_id" not in realtime_columns:
+            self.connection.execute("ALTER TABLE realtime_samples ADD COLUMN metric_code_id INTEGER")
+        if "value_numeric" not in realtime_columns:
+            self.connection.execute("ALTER TABLE realtime_samples ADD COLUMN value_numeric REAL")
+        if "value_text" not in realtime_columns:
+            self.connection.execute("ALTER TABLE realtime_samples ADD COLUMN value_text TEXT")
+        if "source_command" not in realtime_columns:
+            self.connection.execute("ALTER TABLE realtime_samples ADD COLUMN source_command INTEGER")
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metric_codes (
+                metric_code_id INTEGER PRIMARY KEY,
+                metric_code TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                unit TEXT,
+                description TEXT
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_realtime_samples_metric_code_timestamp
+            ON realtime_samples(metric_code_id, timestamp)
+            """
+        )
+        self._seed_metric_codes()
+        self._backfill_realtime_metric_codes()
+
+    def _seed_metric_codes(self) -> None:
+        self.connection.executemany(
+            """
+            INSERT INTO metric_codes(metric_code, label, unit, description)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(metric_code) DO UPDATE SET
+                label=excluded.label,
+                unit=excluded.unit,
+                description=excluded.description
+            """,
+            [
+                (metric_code, seed["label"], seed["unit"], seed["description"])
+                for metric_code, seed in REALTIME_METRIC_CODE_SEEDS.items()
+            ],
+        )
+
+    def _ensure_metric_code(
+        self,
+        metric_code: str,
+        *,
+        label: str | None = None,
+        unit: str | None = None,
+        description: str | None = None,
+    ) -> int:
+        defaults = REALTIME_METRIC_CODE_SEEDS.get(metric_code, {})
+        metric_label = label or defaults.get("label") or metric_code.replace("-", " ").replace(".", " / ").title()
+        metric_unit = unit if unit is not None else defaults.get("unit")
+        metric_description = description if description is not None else defaults.get("description")
+        self.connection.execute(
+            """
+            INSERT INTO metric_codes(metric_code, label, unit, description)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(metric_code) DO UPDATE SET
+                label=COALESCE(excluded.label, metric_codes.label),
+                unit=COALESCE(excluded.unit, metric_codes.unit),
+                description=COALESCE(excluded.description, metric_codes.description)
+            """,
+            (metric_code, metric_label, metric_unit, metric_description),
+        )
+        row = self.connection.execute(
+            "SELECT metric_code_id FROM metric_codes WHERE metric_code=?",
+            (metric_code,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"failed to resolve metric code id for {metric_code}")
+        return int(row["metric_code_id"])
+
+    def _backfill_realtime_metric_codes(self) -> None:
+        rows = self.connection.execute(
+            """
+            SELECT realtime_sample_id, metric, value, metric_code_id, value_numeric, source_command
+            FROM realtime_samples
+            WHERE metric_code_id IS NULL OR value_numeric IS NULL OR source_command IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            metric_code = str(row["metric"])
+            metric_code_id = self._ensure_metric_code(metric_code)
+            value_numeric = row["value_numeric"]
+            if value_numeric is None:
+                value_numeric = float(row["value"])
+            source_command = row["source_command"] if row["source_command"] is not None else CMD_START_REAL_TIME
+            self.connection.execute(
+                """
+                UPDATE realtime_samples
+                SET metric_code_id=?,
+                    value_numeric=?,
+                    source_command=?
+                WHERE realtime_sample_id=?
+                """,
+                (metric_code_id, value_numeric, source_command, int(row["realtime_sample_id"])),
+            )
 
     def _cleanup_legacy_rows(self) -> None:
         # Older builds could persist malformed sleep rows without resolved
@@ -722,15 +940,49 @@ class H59Database:
         if not self._table_exists(source_conn, table):
             return 0
         earliest_target = self._earliest_timestamp(table, target_device_id, timestamp_column)
-        source_rows = source_conn.execute(
-            f"""
-            SELECT {", ".join(select_columns)}
-            FROM {table}
-            WHERE device_id=?
-            ORDER BY {timestamp_column} ASC
-            """,
-            (source_device_id,),
-        ).fetchall()
+        source_columns = self._table_columns(source_conn, table)
+        if table == "realtime_samples":
+            if self._table_exists(source_conn, "metric_codes") and "metric_code_id" in source_columns:
+                source_rows = source_conn.execute(
+                    """
+                    SELECT
+                        rs.timestamp,
+                        rs.metric,
+                        rs.value,
+                        rs.error_code,
+                        rs.raw_packet_hex,
+                        rs.value_numeric,
+                        rs.value_text,
+                        rs.source_command,
+                        mc.metric_code
+                    FROM realtime_samples AS rs
+                    LEFT JOIN metric_codes AS mc
+                      ON mc.metric_code_id = rs.metric_code_id
+                    WHERE rs.device_id=?
+                    ORDER BY rs.timestamp ASC
+                    """,
+                    (source_device_id,),
+                ).fetchall()
+            else:
+                source_rows = source_conn.execute(
+                    """
+                    SELECT timestamp, metric, value, error_code, raw_packet_hex
+                    FROM realtime_samples
+                    WHERE device_id=?
+                    ORDER BY timestamp ASC
+                    """,
+                    (source_device_id,),
+                ).fetchall()
+        else:
+            source_rows = source_conn.execute(
+                f"""
+                SELECT {", ".join(select_columns)}
+                FROM {table}
+                WHERE device_id=?
+                ORDER BY {timestamp_column} ASC
+                """,
+                (source_device_id,),
+            ).fetchall()
         if not source_rows:
             return 0
 
@@ -768,14 +1020,24 @@ class H59Database:
                     )
                 )
             elif table == "realtime_samples":
+                metric_code = row["metric"]
+                if "metric_code" in row.keys() and row["metric_code"]:
+                    metric_code = row["metric_code"]
+                metric_code_id = self._ensure_metric_code(str(metric_code))
+                value_numeric = row["value_numeric"] if "value_numeric" in row.keys() else row["value"]
+                source_command = row["source_command"] if "source_command" in row.keys() else CMD_START_REAL_TIME
                 rows_to_insert.append(
                     (
                         target_device_id,
                         sync_id,
                         utc_text(row["timestamp"]),
-                        row["metric"],
-                        row["value"],
+                        str(metric_code),
+                        int(float(value_numeric)) if value_numeric is not None else 0,
                         row["error_code"],
+                        metric_code_id,
+                        value_numeric,
+                        row["value_text"] if "value_text" in row.keys() else None,
+                        source_command,
                         row["raw_packet_hex"],
                     )
                 )
@@ -1104,16 +1366,74 @@ class H59Database:
         observed_at: str | datetime,
         samples: list[tuple[RealTimeSample, str]],
     ) -> None:
-        observed_at_text = utc_text(observed_at)
-        self.connection.executemany(
-            """
-            INSERT INTO realtime_samples(device_id, sync_id, timestamp, metric, value, error_code, raw_packet_hex)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (device_id, sync_id, observed_at_text, sample.metric, sample.value, sample.error_code, raw_packet_hex)
+        self.record_realtime_observations(
+            device_id,
+            sync_id,
+            observations=[
+                RealtimeObservation(
+                    metric_code=sample.metric,
+                    timestamp=observed_at,
+                    value_numeric=sample.value,
+                    error_code=sample.error_code,
+                    raw_packet_hex=raw_packet_hex,
+                    source_command=CMD_START_REAL_TIME,
+                )
                 for sample, raw_packet_hex in samples
             ],
+        )
+
+    def record_realtime_observations(
+        self,
+        device_id: int,
+        sync_id: int,
+        *,
+        observations: list[RealtimeObservation],
+    ) -> None:
+        if not observations:
+            return
+        rows_to_insert: list[tuple[Any, ...]] = []
+        for observation in observations:
+            metric_code_id = self._ensure_metric_code(
+                observation.metric_code,
+                label=observation.metric_label,
+                unit=observation.unit,
+                description=observation.description,
+            )
+            value_numeric = None if observation.value_numeric is None else float(observation.value_numeric)
+            legacy_value = int(round(value_numeric)) if value_numeric is not None else 0
+            rows_to_insert.append(
+                (
+                    device_id,
+                    sync_id,
+                    utc_text(observation.timestamp),
+                    observation.metric_code,
+                    legacy_value,
+                    observation.error_code,
+                    metric_code_id,
+                    value_numeric,
+                    observation.value_text,
+                    observation.source_command,
+                    observation.raw_packet_hex,
+                )
+            )
+        self.connection.executemany(
+            """
+            INSERT INTO realtime_samples(
+                device_id,
+                sync_id,
+                timestamp,
+                metric,
+                value,
+                error_code,
+                metric_code_id,
+                value_numeric,
+                value_text,
+                source_command,
+                raw_packet_hex
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows_to_insert,
         )
         self.connection.commit()
 

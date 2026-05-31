@@ -16,6 +16,10 @@ METRIC_LABELS = {
     "ecg": "ECG",
     "fatigue": "Fatigue",
     "health-check": "One key measurement",
+    "health-check.cuff-pressure-tenths": "One key cuff pressure",
+    "health-check.diastolic": "One key diastolic",
+    "health-check.heart-rate": "One key heart rate",
+    "health-check.systolic": "One key systolic",
     "heart-rate": "Heart rate",
     "hrv": "HRV",
     "pressure": "Pressure / stress-like",
@@ -328,6 +332,8 @@ def _historical_metric_counts(conn: sqlite3.Connection, device_id: int, report_d
     queries = {
         "blood_oxygen_daily": "SELECT COUNT(*) FROM blood_oxygen_samples WHERE device_id=? AND date(timestamp)=?",
         "blood_oxygen_total": "SELECT COUNT(*) FROM blood_oxygen_samples WHERE device_id=?",
+        "blood_pressure_daily": "SELECT COUNT(*) FROM analytic_blood_pressure_intervals WHERE device_id=? AND date(valid_from)=?",
+        "blood_pressure_total": "SELECT COUNT(*) FROM analytic_blood_pressure_intervals WHERE device_id=?",
         "pressure_daily": "SELECT COUNT(*) FROM pressure_samples WHERE device_id=? AND date(timestamp)=?",
         "pressure_total": "SELECT COUNT(*) FROM pressure_samples WHERE device_id=?",
         "hrv_daily": "SELECT COUNT(*) FROM hrv_samples WHERE device_id=? AND date(timestamp)=?",
@@ -398,24 +404,53 @@ def _latest_hrv_sample(conn: sqlite3.Connection, device_id: int) -> dict[str, An
     }
 
 
+def _latest_blood_pressure_reading(conn: sqlite3.Connection, device_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT systolic, diastolic, valid_from
+        FROM analytic_blood_pressure_intervals
+        WHERE device_id=?
+        ORDER BY valid_from DESC
+        LIMIT 1
+        """,
+        (device_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "systolic": int(row["systolic"]),
+        "diastolic": int(row["diastolic"]),
+        "timestamp": row["valid_from"],
+    }
+
+
 def _latest_realtime_by_metric(conn: sqlite3.Connection, device_id: int) -> dict[str, dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT metric, value, error_code, timestamp
-        FROM realtime_samples
-        WHERE device_id=?
-        ORDER BY metric, timestamp DESC
+        SELECT
+            COALESCE(mc.metric_code, rs.metric) AS metric_code,
+            COALESCE(rs.value_numeric, rs.value) AS value_numeric,
+            rs.value_text,
+            rs.error_code,
+            rs.timestamp
+        FROM realtime_samples AS rs
+        LEFT JOIN metric_codes AS mc
+          ON mc.metric_code_id = rs.metric_code_id
+        WHERE rs.device_id=?
+        ORDER BY metric_code, rs.timestamp DESC
         """,
         (device_id,),
     ).fetchall()
     output: dict[str, dict[str, Any]] = {}
     counts: dict[str, int] = {}
     for row in rows:
-        metric = row["metric"]
+        metric = row["metric_code"]
         counts[metric] = counts.get(metric, 0) + 1
         if metric not in output:
+            value_numeric = row["value_numeric"]
+            value_text = row["value_text"]
             output[metric] = {
-                "value": int(row["value"]),
+                "value": int(value_numeric) if value_numeric is not None else value_text,
                 "error_code": int(row["error_code"]),
                 "timestamp": row["timestamp"],
                 "count": 1,
@@ -742,14 +777,18 @@ def _coverage_rows(
     )
 
     bp_supported = bool(capabilities.get("support_blood_pressure"))
-    bp_data = "blood-pressure" in realtime
+    bp_data = historical_metrics["blood_pressure_total"] > 0
     rows.append(
         (
             "Blood pressure",
             _status_label(bp_data, partial=bp_supported),
-            "Realtime endpoint only" if bp_data else ("Device advertises support, but no stored observations exist" if bp_supported else "No capture path proven"),
-            "Missing" if not bp_data else "Partial",
-            "No proven local extraction path yet; any future presentation must preserve separate systolic and diastolic values",
+            (
+                f"Paired systolic/diastolic readings available ({historical_metrics['blood_pressure_daily']} for selected day)"
+                if bp_data
+                else ("Device advertises support, but no stored observations exist" if bp_supported else "No capture path proven")
+            ),
+            "Missing" if not bp_data else "Available",
+            "Historical backfill is still unresolved; active one-key measurements are currently modeled separately then denormalized in analytics",
         )
     )
 
@@ -764,7 +803,7 @@ def _coverage_rows(
     )
 
     one_key_supported = bool(capabilities.get("support_one_key_check"))
-    one_key_data = "health-check" in realtime
+    one_key_data = any(metric.startswith("health-check.") for metric in realtime)
     rows.append(
         (
             "One key measurement",
@@ -815,6 +854,7 @@ def render_health_dashboard_report(
         sleep = _sleep_summary(conn, ctx.device_id, ctx.report_date)
         historical_metrics = _historical_metric_counts(conn, ctx.device_id, ctx.report_date)
         latest_blood_oxygen = _latest_blood_oxygen_sample(conn, ctx.device_id)
+        latest_blood_pressure = _latest_blood_pressure_reading(conn, ctx.device_id)
         latest_pressure = _latest_pressure_sample(conn, ctx.device_id)
         latest_hrv = _latest_hrv_sample(conn, ctx.device_id)
         realtime = _latest_realtime_by_metric(conn, ctx.device_id)
@@ -940,16 +980,21 @@ def render_health_dashboard_report(
             lines.append("- Not available in the current database.")
         lines.append("")
         lines.append("### Blood Pressure")
-        if "blood-pressure" in realtime:
-            entry = realtime["blood-pressure"]
-            lines.append(f"- Realtime sample only: `{entry['value']}` at `{_fmt_ts(entry['timestamp'])}`")
+        if historical_metrics["blood_pressure_total"] > 0 and latest_blood_pressure is not None:
+            lines.append(
+                f"- Paired readings: `{historical_metrics['blood_pressure_total']}` total, "
+                f"`{historical_metrics['blood_pressure_daily']}` on selected day"
+            )
+            lines.append(
+                f"- Latest reading: `{latest_blood_pressure['systolic']}/{latest_blood_pressure['diastolic']} mmHg` "
+                f"at `{_fmt_ts(latest_blood_pressure['timestamp'])}`"
+            )
         else:
             lines.append("- Not available in the current database.")
         lines.append("")
         lines.append("### One Key Measurement")
-        if "health-check" in realtime:
-            entry = realtime["health-check"]
-            lines.append(f"- Realtime sample only: `{entry['value']}` at `{_fmt_ts(entry['timestamp'])}`")
+        if any(metric.startswith("health-check.") for metric in realtime):
+            lines.append("- Active one-key measurement observations exist in `realtime_samples` and are denormalized in analytics.")
         else:
             lines.append("- Not available in the current database.")
         lines.append("")

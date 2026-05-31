@@ -169,7 +169,14 @@ Assessment:
 
 Still unresolved:
 - historical blood pressure extraction
+- whether any path other than `HealthCheck` can backfill blood-pressure history
 - final sleep field semantics
 - whether the proven Big Data sleep request can backfill several older nights or only the latest night
 - final blood oxygen field semantics
 - exact meaning of some pressure/stress-like values
+
+Proven on 2026-05-30:
+- realtime `0x69 / dataType=5` (`HealthCheck`) emits final BP readings
+- realtime `0x69 / dataType=2` does not emit final systolic/diastolic values on this bracelet
+- normal historical `sync` traffic does not currently expose any additional paired-BP command beyond the known history set (`1`, `3`, `21`, `22`, `39`, `42`, `47`, `55`, `57`, `67`)
+- the only unmapped historical reply seen in captured sync traffic is a fixed `0x2f` packet, not a timestamped measurement series

@@ -13,6 +13,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -42,11 +43,22 @@ from h59_client.config import (
 from h59_client.devices import discover_and_store_targets
 from h59_client.report import render_health_dashboard_report
 from h59_client.storage import H59Database
-from h59_client.sync import sync_h59
+from h59_client.sync import realtime_h59, sync_h59
 
 
 logger = logging.getLogger(__name__)
 DEFAULT_DISCOVERY_NAME = "H59"
+REALTIME_METRIC_CHOICES = (
+    "heart-rate",
+    "blood-pressure",
+    "spo2",
+    "fatigue",
+    "health-check",
+    "ecg",
+    "pressure",
+    "blood-sugar",
+    "hrv",
+)
 
 
 def format_operational_error(exc: Exception) -> str | None:
@@ -278,6 +290,8 @@ def build_sync_child_command(args: argparse.Namespace) -> list[str]:
         cmd.extend(args.realtime)
     if args.realtime_samples != 3:
         cmd.extend(["--realtime-samples", str(args.realtime_samples)])
+    if getattr(args, "realtime_duration", None) is not None:
+        cmd.extend(["--realtime-duration", str(args.realtime_duration)])
     return cmd
 
 
@@ -328,12 +342,103 @@ def print_sync_results(results: list[dict[str, Any]]) -> None:
                 **result,
             )
         )
+        realtime_results = result.get("realtime_results") or {}
+        health_check = realtime_results.get("health-check")
+        if health_check is not None:
+            final_result = health_check.get("final_result")
+            if final_result:
+                print(
+                    "  Health check result: {systolic}/{diastolic} mmHg, HR {heart_rate} bpm at {timestamp}".format(
+                        systolic=final_result.get("systolic"),
+                        diastolic=final_result.get("diastolic"),
+                        heart_rate=final_result.get("heart_rate"),
+                        timestamp=final_result.get("timestamp"),
+                    )
+                )
+            else:
+                print(f"  Health check packets captured: {health_check.get('packets', 0)}")
+        for metric_name, metric_result in sorted(realtime_results.items()):
+            if metric_name == "health-check":
+                continue
+            print(
+                "  Realtime {metric}: {samples} samples (last at {last_timestamp})".format(
+                    metric=metric_name,
+                    samples=metric_result.get("samples", 0),
+                    last_timestamp=metric_result.get("last_timestamp", "n/a"),
+                )
+            )
     if len(results) > 1:
         print(f"Completed sync for {len(results)} devices")
 
 
+def print_realtime_results(results: list[dict[str, Any]]) -> None:
+    for result in results:
+        label = result.get("nickname") or result.get("name") or result["address"]
+        print(
+            "Captured realtime measurements for {label} ({address}) into {db_path} (sync_id={sync_id})".format(
+                label=label,
+                **result,
+            )
+        )
+        realtime_results = result.get("realtime_results") or {}
+        for metric_name, realtime_result in realtime_results.items():
+            final_result = realtime_result.get("final_result")
+            if final_result:
+                print(
+                    "  {metric}: {systolic}/{diastolic} mmHg, HR {heart_rate} bpm at {timestamp}".format(
+                        metric=metric_name,
+                        systolic=final_result.get("systolic"),
+                        diastolic=final_result.get("diastolic"),
+                        heart_rate=final_result.get("heart_rate"),
+                        timestamp=final_result.get("timestamp"),
+                    )
+                )
+            elif "samples" in realtime_result:
+                print(
+                    "  {metric}: {samples} samples (last at {last_timestamp})".format(
+                        metric=metric_name,
+                        samples=realtime_result.get("samples", 0),
+                        last_timestamp=realtime_result.get("last_timestamp", "n/a"),
+                    )
+                )
+            else:
+                print(f"  {metric_name}: {realtime_result.get('packets', 0)} packets")
+
+
+def _wait_for_enter_to_stop(stop_event: threading.Event) -> None:
+    try:
+        input()
+    except EOFError:
+        pass
+    finally:
+        stop_event.set()
+
+
+def _keypress_stop_factory(metric_name: str) -> Callable[[], bool]:
+    stop_event = threading.Event()
+    print(f"Realtime {metric_name} running. Press Enter to stop.")
+    threading.Thread(target=_wait_for_enter_to_stop, args=(stop_event,), daemon=True).start()
+    return stop_event.is_set
+
+
+def validate_realtime_metrics(metrics: list[str]) -> list[str]:
+    invalid = [metric for metric in metrics if metric not in REALTIME_METRIC_CHOICES]
+    if invalid:
+        allowed = ", ".join(REALTIME_METRIC_CHOICES)
+        raise SystemExit(f"unsupported realtime metric(s): {', '.join(invalid)}. Choose from: {allowed}")
+    return metrics
+
+
 def run_foreground_sync(args: argparse.Namespace) -> int:
     device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
+    realtime_should_stop = None
+    if args.realtime and args.realtime_until_keypress:
+        stop_event = threading.Event()
+        print("Realtime measurement running. Press Enter to stop.")
+        threading.Thread(target=_wait_for_enter_to_stop, args=(stop_event,), daemon=True).start()
+        realtime_should_stop = stop_event.is_set
+    elif args.realtime and args.realtime_duration is not None:
+        print(f"Realtime measurement running for {args.realtime_duration} seconds.")
     results = asyncio.run(
         sync_h59(
             db_path=args.db,
@@ -345,6 +450,8 @@ def run_foreground_sync(args: argparse.Namespace) -> int:
             capture_gatt=args.capture_gatt,
             realtime_metrics=args.realtime,
             realtime_samples=args.realtime_samples,
+            realtime_duration_seconds=args.realtime_duration,
+            realtime_should_stop=realtime_should_stop,
         )
     )
     print_sync_results(results)
@@ -418,6 +525,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     capture_gatt=args.capture_gatt,
                     realtime_metrics=args.realtime,
                     realtime_samples=args.realtime_samples,
+                    realtime_duration_seconds=args.realtime_duration,
                 )
             )
             logger.info("sync successful devices=%s", len(results))
@@ -483,6 +591,14 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
 
 
 def handle_sync(args: argparse.Namespace) -> int:
+    if args.realtime_until_keypress and not args.realtime:
+        raise SystemExit("--realtime-until-keypress requires at least one --realtime metric")
+    if args.realtime_duration is not None and not args.realtime:
+        raise SystemExit("--realtime-duration requires at least one --realtime metric")
+    if args.realtime_until_keypress and args.realtime_duration is not None:
+        raise SystemExit("--realtime-until-keypress cannot be combined with --realtime-duration")
+    if args.realtime_until_keypress and args.daemonize:
+        raise SystemExit("--realtime-until-keypress cannot be used with --daemonize")
     if args.daemon_child:
         return run_daemon_loop(args)
     if args.daemonize:
@@ -490,6 +606,37 @@ def handle_sync(args: argparse.Namespace) -> int:
         print(f"Started h59 daemon (pid={pid})")
         return 0
     return run_foreground_sync(args)
+
+
+def handle_realtime(args: argparse.Namespace) -> int:
+    metrics = validate_realtime_metrics(args.metrics or list(REALTIME_METRIC_CHOICES))
+    interactive = args.time is None
+    if interactive and len(metrics) > 1:
+        print("Realtime metrics will run sequentially over a single BLE session. Press Enter to stop each metric and continue to the next.")
+        metric_start_hook = _keypress_stop_factory
+        stop_callback = None
+    elif interactive:
+        metric_start_hook = _keypress_stop_factory
+        stop_callback = None
+    else:
+        metric_start_hook = None
+        stop_callback = None
+        print(f"Realtime measurement running for {args.time} seconds per metric.")
+
+    result = asyncio.run(
+        realtime_h59(
+            db_path=args.db,
+            selector=args.selector,
+            metric_names=metrics,
+            name=DEFAULT_DISCOVERY_NAME,
+            scan_timeout=args.scan_timeout,
+            duration_seconds=args.time,
+            should_stop=stop_callback,
+            metric_start_hook=metric_start_hook,
+        )
+    )
+    print_realtime_results([result])
+    return 0
 
 
 def handle_vibrate(args: argparse.Namespace) -> int:
@@ -751,13 +898,25 @@ def handle_daemon_stop(args: argparse.Namespace) -> int:
             break
         time.sleep(0.1)
     clear_stale_pidfile(pid_file)
+    forced = False
+    if pid_is_running(pid):
+        os.kill(pid, signal.SIGKILL)
+        forced = True
+        for _ in range(50):
+            if not pid_is_running(pid):
+                break
+            time.sleep(0.1)
+        clear_stale_pidfile(pid_file)
     if pid_is_running(pid):
         print(f"failed to stop h59 daemon (pid={pid})")
         return 1
 
     pid_file.unlink(missing_ok=True)
     meta_file.unlink(missing_ok=True)
-    print(f"Stopped h59 daemon (pid={pid})")
+    if forced:
+        print(f"Stopped h59 daemon (pid={pid}) with SIGKILL after graceful shutdown timed out")
+    else:
+        print(f"Stopped h59 daemon (pid={pid})")
     return 0
 
 
@@ -854,18 +1013,10 @@ def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
     parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
     parser.add_argument("--capture-gatt", action="store_true", help="force a full GATT inventory capture during sync")
-    parser.add_argument("--realtime", nargs="*", default=[], choices=sorted({
-        "heart-rate",
-        "blood-pressure",
-        "spo2",
-        "fatigue",
-        "health-check",
-        "ecg",
-        "pressure",
-        "blood-sugar",
-        "hrv",
-    }), help="optional realtime metrics to query")
-    parser.add_argument("--realtime-samples", type=int, default=3, help="sample count per realtime metric")
+    parser.add_argument("--realtime", nargs="*", default=[], choices=sorted(REALTIME_METRIC_CHOICES), help=argparse.SUPPRESS)
+    parser.add_argument("--realtime-samples", type=int, default=3, help=argparse.SUPPRESS)
+    parser.add_argument("--realtime-duration", type=parse_duration, help=argparse.SUPPRESS)
+    parser.add_argument("--realtime-until-keypress", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", help="state directory for daemon files")
     parser.add_argument("--pid-file", help="PID file path for daemon mode")
     parser.add_argument("--log-file", help="log file path for daemon mode")
@@ -881,6 +1032,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser = subparsers.add_parser("sync", help="run a one-shot sync or start a detached sync worker")
     add_common_sync_arguments(sync_parser)
     sync_parser.set_defaults(handler=handle_sync)
+
+    realtime_parser = subparsers.add_parser("realtime", help="run active live measurements without performing a history sync")
+    add_target_arguments(realtime_parser, selector_required=True)
+    realtime_parser.add_argument("metrics", nargs="*", help="realtime metrics to run; defaults to all known metrics")
+    realtime_parser.add_argument("-t", "--time", type=parse_duration, help="run each realtime metric for a fixed duration; defaults to interactive mode until Enter")
+    realtime_parser.set_defaults(handler=handle_realtime)
 
     vibrate_parser = subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
     add_target_arguments(vibrate_parser)

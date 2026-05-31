@@ -39,6 +39,7 @@ Practical consequence:
 ## Supporting Tables
 
 - `database_metadata`
+- `metric_codes`
 - `battery_samples`
 - `heart_rate_settings`
 - `capability_snapshots`
@@ -63,6 +64,7 @@ erDiagram
     devices ||--o{ battery_samples : records
     devices ||--o{ heart_rate_settings : records
     devices ||--o{ capability_snapshots : records
+    metric_codes ||--o{ realtime_samples : classifies
     devices ||--o{ realtime_samples : records
     devices ||--o{ raw_packets : emits
     devices ||--o{ gatt_characteristics : exposes
@@ -168,8 +170,42 @@ Current note:
 Paired systolic/diastolic blood-pressure readings.
 
 Current note:
-- the table exists as the correct local model for BP
-- the extraction path on this H59 is still under investigation
+- this table is reserved for historical or explicitly decoded paired BP readings
+- active one-key / realtime BP results are first stored in `realtime_samples`
+- analytics may denormalize those realtime observations into paired BP readings for consumption
+
+### `metric_codes`
+
+Reference table for normalized realtime metric identifiers.
+
+Key fields:
+- `metric_code_id`
+- `metric_code`
+- `label`
+- `unit`
+- `description`
+
+Current role:
+- decouple realtime storage from ad hoc text labels
+- let the device layer persist raw live observations without pretending they are historical samples
+
+### `realtime_samples`
+
+Normalized device-layer storage for active realtime observations.
+
+Key fields:
+- `timestamp`
+- `metric_code_id`
+- `value_numeric`
+- `value_text`
+- `error_code`
+- `source_command`
+- `raw_packet_hex`
+
+Notes:
+- this table is for live observations initiated with `--realtime`
+- it is intentionally separate from historical tables such as `heart_rates`, `pressure_samples`, or `blood_pressure_readings`
+- legacy `metric` / `value` columns are retained for migration compatibility, but `metric_code_id` and `value_numeric` are the normalized device-layer fields
 
 ### `pressure_samples`
 
@@ -193,6 +229,7 @@ Current uniqueness rules:
 - `gatt_characteristics(device_id, char_uuid, handle)`
 - `sleep_sessions(device_id, source_command, raw_json)`
 - `sleep_stage_samples(sleep_session_id, sequence_index)`
+- `metric_codes(metric_code)`
 - `blood_oxygen_samples(device_id, timestamp, source_command)`
 - `blood_pressure_readings(device_id, timestamp, source_command)`
 - `pressure_samples(device_id, timestamp, source_command)`

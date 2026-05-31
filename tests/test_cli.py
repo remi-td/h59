@@ -1,8 +1,11 @@
+import argparse
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import signal
 
 from bleak.exc import BleakError
+import pytest
 
 from h59_client.cli import (
     archive_db_path,
@@ -11,6 +14,7 @@ from h59_client.cli import (
     default_state_dir,
     format_daemon_operational_notice,
     format_operational_error,
+    handle_daemon_stop,
     main,
     parse_duration,
     resolve_runtime_paths,
@@ -38,6 +42,15 @@ def test_build_parser_supports_device_clock_override():
     parser = build_parser()
     args = parser.parse_args(["sync", "--device-clock", "local"])
     assert args.device_clock == "local"
+
+
+def test_build_parser_supports_realtime_control_arguments():
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "remi", "health-check", "-t", "30s"])
+    assert args.command == "realtime"
+    assert args.selector == "remi"
+    assert args.metrics == ["health-check"]
+    assert args.time == 30
 
 
 def test_build_parser_supports_config_commands():
@@ -185,6 +198,15 @@ def test_build_parser_supports_report_command():
     assert args.output == "report.md"
 
 
+def test_build_parser_supports_realtime_command_without_metrics():
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "left-wrist"])
+    assert args.command == "realtime"
+    assert args.selector == "left-wrist"
+    assert args.metrics == []
+    assert args.time is None
+
+
 def test_archive_db_path_formats_expected_name(tmp_path):
     db_path = tmp_path / "h59.sqlite"
     archived = archive_db_path(db_path, now=datetime(2026, 5, 27, 10, 11, 12, tzinfo=UTC))
@@ -241,12 +263,75 @@ def test_format_daemon_operational_notice_for_timeout():
     assert "Timed out while trying to reach an H59 device over Bluetooth." in message
 
 
+def test_handle_daemon_stop_graceful(monkeypatch, tmp_path, capsys):
+    pid_file = tmp_path / "daemon.pid"
+    meta_file = tmp_path / "daemon.json"
+    pid_file.write_text("123\n")
+    meta_file.write_text("{}")
+    args = argparse.Namespace(state_dir=str(tmp_path), pid_file=str(pid_file), log_file=str(tmp_path / "daemon.log"))
+
+    kill_calls: list[tuple[int, int]] = []
+    running_states = [True, True, False, False]
+
+    def fake_pid_is_running(_pid: int) -> bool:
+        if running_states:
+            return running_states.pop(0)
+        return False
+
+    monkeypatch.setattr("h59_client.cli.os.kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr("h59_client.cli.pid_is_running", fake_pid_is_running)
+    monkeypatch.setattr("h59_client.cli.time.sleep", lambda _seconds: None)
+
+    assert handle_daemon_stop(args) == 0
+    out = capsys.readouterr().out
+    assert "Stopped h59 daemon (pid=123)" in out
+    assert "SIGKILL" not in out
+    assert kill_calls == [(123, signal.SIGTERM)]
+
+
+def test_handle_daemon_stop_forces_kill_after_timeout(monkeypatch, tmp_path, capsys):
+    pid_file = tmp_path / "daemon.pid"
+    meta_file = tmp_path / "daemon.json"
+    pid_file.write_text("123\n")
+    meta_file.write_text("{}")
+    args = argparse.Namespace(state_dir=str(tmp_path), pid_file=str(pid_file), log_file=str(tmp_path / "daemon.log"))
+
+    kill_calls: list[tuple[int, int]] = []
+    running_states = [True] + ([True] * 151) + [True, True, False, False]
+
+    def fake_pid_is_running(_pid: int) -> bool:
+        if running_states:
+            return running_states.pop(0)
+        return False
+
+    monkeypatch.setattr("h59_client.cli.os.kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr("h59_client.cli.pid_is_running", fake_pid_is_running)
+    monkeypatch.setattr("h59_client.cli.time.sleep", lambda _seconds: None)
+
+    assert handle_daemon_stop(args) == 0
+    out = capsys.readouterr().out
+    assert "with SIGKILL after graceful shutdown timed out" in out
+    assert kill_calls == [(123, signal.SIGTERM), (123, signal.SIGKILL)]
+
+
 def test_main_returns_clean_error_for_known_runtime_failure(monkeypatch, capsys):
     monkeypatch.setattr("h59_client.cli.handle_device_info", lambda args: (_ for _ in ()).throw(RuntimeError("No H59-like device found during scan")))
     exit_code = main(["device", "info"])
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "No H59 device was discovered." in captured.err
+
+
+def test_main_rejects_realtime_until_keypress_with_daemonize(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["sync", "--daemonize", "--realtime", "health-check", "--realtime-until-keypress"])
+    assert "--realtime-until-keypress cannot be used with --daemonize" in str(excinfo.value)
+
+
+def test_main_rejects_realtime_duration_without_metric(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["sync", "--realtime-duration", "30s"])
+    assert "--realtime-duration requires at least one --realtime metric" in str(excinfo.value)
 
 
 def test_daemon_status_warns_for_stale_heartbeat(tmp_path, monkeypatch, capsys):

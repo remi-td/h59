@@ -14,7 +14,7 @@ import h59_dashboard_api.payloads.metrics as metrics_payload_module  # noqa: E40
 from h59_dashboard_api.config import Settings  # noqa: E402
 from h59_dashboard_api.main import create_app  # noqa: E402
 from h59_client.protocol import BatteryStatus  # noqa: E402
-from h59_client.storage import H59Database  # noqa: E402
+from h59_client.storage import H59Database, RealtimeObservation  # noqa: E402
 
 
 def _seed_db(path: Path) -> None:
@@ -213,3 +213,54 @@ def test_dashboard_api_today_uses_utc_day_boundaries(tmp_path: Path, monkeypatch
     assert heart_card["value"] == 72
     assert len(heart_card["sparkline"]) == 1
     assert heart_card["sparkline"][0]["timestamp"] == "2026-05-29T00:05:00+00:00"
+
+
+def test_dashboard_api_today_uses_realtime_health_check_for_blood_pressure(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        device_id = int(db.connection.execute("SELECT device_id FROM devices LIMIT 1").fetchone()[0])
+        sync_id = int(db.connection.execute("SELECT MIN(sync_id) FROM syncs").fetchone()[0])
+        db.connection.execute("DELETE FROM blood_pressure_readings")
+        db.record_realtime_observations(
+            device_id,
+            sync_id,
+            observations=[
+                RealtimeObservation(
+                    metric_code="health-check.diastolic",
+                    timestamp=datetime(2026, 5, 29, 12, 0, tzinfo=UTC),
+                    value_numeric=79,
+                    raw_packet_hex="6905004f793f00000000000000000000",
+                    source_command=105,
+                ),
+                RealtimeObservation(
+                    metric_code="health-check.systolic",
+                    timestamp=datetime(2026, 5, 29, 12, 0, tzinfo=UTC),
+                    value_numeric=121,
+                    raw_packet_hex="6905004f793f00000000000000000000",
+                    source_command=105,
+                ),
+            ],
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(today_payload_module, "utc_now", lambda: datetime(2026, 5, 29, 12, 0, tzinfo=UTC))
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=False,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    today = client.get("/api/today")
+    assert today.status_code == 200
+    payload = today.json()
+    bp_card = next(card for card in payload["cards"] if card["id"] == "blood_pressure")
+    assert bp_card["display_value"] == "121/79 mmHg"

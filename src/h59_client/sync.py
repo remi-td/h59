@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from h59_client import date_utils
 from h59_client.ble import BigDataTransport, PacketTransport, enumerate_services, read_device_versions
@@ -26,7 +26,6 @@ from h59_client.protocol import (
     CMD_START_REAL_TIME,
     READ_HEART_RATE_LOG_SETTINGS_PACKET,
     ActivityBlockParser,
-    BloodPressureReading,
     HeartRateDayParser,
     HealthCheckSample,
     HrvHistoryParser,
@@ -51,6 +50,7 @@ from h59_client.protocol import (
     stop_realtime_packet,
 )
 from h59_client.storage import H59Database
+from h59_client.storage import RealtimeObservation
 
 INITIAL_BACKFILL_MAX_DAYS = 60
 INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS = 2
@@ -168,10 +168,47 @@ async def _query_realtime(transport: PacketTransport, metric_name: str, *, sampl
     return out
 
 
+async def _query_realtime_controlled(
+    transport: PacketTransport,
+    metric_name: str,
+    *,
+    samples: int,
+    duration_seconds: float | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    poll_timeout: float = 1.0,
+):
+    if duration_seconds is None and should_stop is None:
+        return await _query_realtime(transport, metric_name, samples=samples)
+
+    metric = REALTIME_NAME_MAP[metric_name]
+    await transport.send_packet(start_realtime_packet(metric))
+    out = []
+    started = asyncio.get_running_loop().time()
+    try:
+        while True:
+            if should_stop is not None and should_stop():
+                break
+            if duration_seconds is not None and (asyncio.get_running_loop().time() - started) >= duration_seconds:
+                break
+            remaining = poll_timeout
+            if duration_seconds is not None:
+                remaining = min(remaining, max(0.1, duration_seconds - (asyncio.get_running_loop().time() - started)))
+            try:
+                packet, observed_at = (await transport.read_command_packets(CMD_START_REAL_TIME, expected=1, timeout=remaining))[0]
+            except TimeoutError:
+                continue
+            out.append((parse_realtime_packet(packet), packet.hex(), observed_at))
+        return out
+    finally:
+        await transport.send_packet(stop_realtime_packet(metric))
+
+
 async def _query_health_check(
     transport: PacketTransport,
     *,
-    timeout: float = 40.0,
+    hard_timeout: float | None = 40.0,
+    stop_on_idle: bool = True,
+    should_stop: Callable[[], bool] | None = None,
     idle_timeout: float = 5.0,
 ) -> tuple[list[tuple[HealthCheckSample, str, str]], tuple[HealthCheckSample, str, str] | None]:
     metric = RealTimeMetric.HEALTH_CHECK
@@ -181,14 +218,18 @@ async def _query_health_check(
     started = asyncio.get_running_loop().time()
     last_packet_at = started
     try:
-        while asyncio.get_running_loop().time() - started < timeout:
-            remaining = min(idle_timeout, timeout - (asyncio.get_running_loop().time() - started))
-            if remaining <= 0:
+        while True:
+            if should_stop is not None and should_stop():
                 break
+            if hard_timeout is not None and (asyncio.get_running_loop().time() - started) >= hard_timeout:
+                break
+            remaining = idle_timeout
+            if hard_timeout is not None:
+                remaining = min(remaining, max(0.1, hard_timeout - (asyncio.get_running_loop().time() - started)))
             try:
                 packet, observed_at = (await transport.read_command_packets(CMD_START_REAL_TIME, expected=1, timeout=remaining))[0]
             except TimeoutError:
-                if out and asyncio.get_running_loop().time() - last_packet_at >= idle_timeout:
+                if stop_on_idle and out and asyncio.get_running_loop().time() - last_packet_at >= idle_timeout:
                     break
                 continue
             parsed = parse_health_check_packet(packet)
@@ -200,6 +241,67 @@ async def _query_health_check(
         return out, final_reading
     finally:
         await transport.send_packet(stop_realtime_packet(metric))
+
+
+def _health_check_observations(
+    samples: list[tuple[HealthCheckSample, str, str]],
+    final_reading: tuple[HealthCheckSample, str, str] | None,
+) -> tuple[list[RealtimeObservation], dict[str, Any]]:
+    observations: list[RealtimeObservation] = []
+    for sample, raw_packet_hex, observed_at in samples:
+        observations.append(
+            RealtimeObservation(
+                metric_code="health-check.cuff-pressure-tenths",
+                timestamp=observed_at,
+                value_numeric=int(sample.cuff_pressure_tenths),
+                error_code=int(sample.error_code),
+                raw_packet_hex=raw_packet_hex,
+                source_command=CMD_START_REAL_TIME,
+            )
+        )
+    result_summary = None
+    if final_reading is not None:
+        sample, raw_packet_hex, observed_at = final_reading
+        if sample.diastolic is not None:
+            observations.append(
+                RealtimeObservation(
+                    metric_code="health-check.diastolic",
+                    timestamp=observed_at,
+                    value_numeric=int(sample.diastolic),
+                    error_code=int(sample.error_code),
+                    raw_packet_hex=raw_packet_hex,
+                    source_command=CMD_START_REAL_TIME,
+                )
+            )
+        if sample.systolic is not None:
+            observations.append(
+                RealtimeObservation(
+                    metric_code="health-check.systolic",
+                    timestamp=observed_at,
+                    value_numeric=int(sample.systolic),
+                    error_code=int(sample.error_code),
+                    raw_packet_hex=raw_packet_hex,
+                    source_command=CMD_START_REAL_TIME,
+                )
+            )
+        if sample.heart_rate is not None:
+            observations.append(
+                RealtimeObservation(
+                    metric_code="health-check.heart-rate",
+                    timestamp=observed_at,
+                    value_numeric=int(sample.heart_rate),
+                    error_code=int(sample.error_code),
+                    raw_packet_hex=raw_packet_hex,
+                    source_command=CMD_START_REAL_TIME,
+                )
+            )
+        result_summary = {
+            "diastolic": int(sample.diastolic) if sample.diastolic is not None else None,
+            "systolic": int(sample.systolic) if sample.systolic is not None else None,
+            "heart_rate": int(sample.heart_rate) if sample.heart_rate is not None else None,
+            "timestamp": observed_at,
+        }
+    return observations, {"packets": len(samples), "final_result": result_summary}
 
 
 def determine_sync_dates(
@@ -235,6 +337,8 @@ async def sync_one_h59(
     capture_gatt: bool | None = None,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
+    realtime_duration_seconds: int | None = None,
+    realtime_should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     database = H59Database(db_path)
 
@@ -288,6 +392,7 @@ async def sync_one_h59(
             if client.services.get_service(BIGDATA_SERVICE_UUID) is not None:
                 bigdata_transport = BigDataTransport(client, packet_callback=record_packet)
                 await bigdata_transport.start()
+            realtime_results: dict[str, Any] = {}
             try:
                 battery_sample, battery_packet_hex, battery_ts = await _query_battery(transport)
                 database.record_battery(device_id, sync_id, timestamp=battery_ts, sample=battery_sample, raw_packet_hex=battery_packet_hex)
@@ -420,24 +525,27 @@ async def sync_one_h59(
                 if realtime_metrics:
                     for metric_name in realtime_metrics:
                         if metric_name == "health-check":
-                            samples, final_reading = await _query_health_check(transport)
-                            if final_reading is not None:
-                                sample, raw_packet_hex, observed_at = final_reading
-                                database.record_blood_pressure_readings(
+                            samples, final_reading = await _query_health_check(
+                                transport,
+                                hard_timeout=None if realtime_should_stop is not None and realtime_duration_seconds is None else float(realtime_duration_seconds) if realtime_duration_seconds is not None else 40.0,
+                                stop_on_idle=not (realtime_should_stop is not None or realtime_duration_seconds is not None),
+                                should_stop=realtime_should_stop,
+                            )
+                            observations, realtime_results["health-check"] = _health_check_observations(samples, final_reading)
+                            if observations:
+                                database.record_realtime_observations(
                                     device_id,
                                     sync_id,
-                                    readings=[
-                                        BloodPressureReading(
-                                            timestamp=datetime.fromisoformat(observed_at),
-                                            systolic=int(sample.systolic),
-                                            diastolic=int(sample.diastolic),
-                                        )
-                                    ],
-                                    raw_packet_hex=raw_packet_hex,
-                                    source_command=CMD_START_REAL_TIME,
+                                    observations=observations,
                                 )
                             continue
-                        samples = await _query_realtime(transport, metric_name, samples=realtime_samples)
+                        samples = await _query_realtime_controlled(
+                            transport,
+                            metric_name,
+                            samples=realtime_samples,
+                            duration_seconds=float(realtime_duration_seconds) if realtime_duration_seconds is not None else None,
+                            should_stop=realtime_should_stop,
+                        )
                         if samples:
                             observed_at = samples[-1][2]
                             database.record_realtime_samples(
@@ -446,6 +554,10 @@ async def sync_one_h59(
                                 observed_at=observed_at,
                                 samples=[(sample, raw_packet_hex) for sample, raw_packet_hex, _ in samples],
                             )
+                            realtime_results[metric_name] = {
+                                "samples": len(samples),
+                                "last_timestamp": observed_at,
+                            }
             finally:
                 if bigdata_transport is not None:
                     await bigdata_transport.stop()
@@ -465,6 +577,7 @@ async def sync_one_h59(
             "incremental": incremental,
             "last_sync_at": last_sync_at.isoformat() if last_sync_at is not None else None,
             "captured_gatt": bool(should_capture_gatt),
+            "realtime_results": realtime_results,
         }
     finally:
         database.close()
@@ -481,6 +594,8 @@ async def sync_h59(
     capture_gatt: bool | None = None,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
+    realtime_duration_seconds: int | None = None,
+    realtime_should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     if selector:
         target = await resolve_single_target(
@@ -498,6 +613,8 @@ async def sync_h59(
                 capture_gatt=capture_gatt,
                 realtime_metrics=realtime_metrics,
                 realtime_samples=realtime_samples,
+                realtime_duration_seconds=realtime_duration_seconds,
+                realtime_should_stop=realtime_should_stop,
             )
         ]
 
@@ -515,9 +632,117 @@ async def sync_h59(
             capture_gatt=capture_gatt,
             realtime_metrics=realtime_metrics,
             realtime_samples=realtime_samples,
+            realtime_duration_seconds=realtime_duration_seconds,
+            realtime_should_stop=realtime_should_stop,
         )
         results.append(result)
     return results
+
+
+async def realtime_h59(
+    *,
+    db_path: str | Path,
+    selector: str,
+    metric_names: list[str],
+    name: str = "H59",
+    scan_timeout: float = 20.0,
+    duration_seconds: int | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    metric_start_hook: Callable[[str], Callable[[], bool] | None] | None = None,
+) -> dict[str, Any]:
+    database = H59Database(db_path)
+    try:
+        target = await resolve_single_target(
+            db_path=str(db_path),
+            selector=selector,
+            name=name,
+            scan_timeout=scan_timeout,
+        )
+        client = await connect_target(target, timeout=20.0)
+        try:
+            now = date_utils.utc_now()
+            hw_version, fw_version = await read_device_versions(client)
+            device_id = database.upsert_device(
+                address=target.address,
+                name=target.name,
+                advertisement=target.advertisement,
+                hw_version=hw_version,
+                fw_version=fw_version,
+                last_seen_at=now,
+            )
+            sync_id = database.create_sync(
+                device_id,
+                started_at=now,
+                source="h59_client.realtime",
+            )
+
+            def record_packet(direction: str, channel_uuid: str, payload: bytearray, observed_at: str) -> None:
+                command_id = None
+                if payload:
+                    if payload[0] == BIGDATA_MAGIC and len(payload) > 1:
+                        command_id = payload[1]
+                    else:
+                        command_id = payload[0] & 127
+                database.record_raw_packet(
+                    device_id,
+                    sync_id,
+                    timestamp=observed_at,
+                    direction=direction,
+                    channel_uuid=channel_uuid,
+                    packet_hex=payload.hex(),
+                    command_id=command_id,
+                )
+
+            transport = PacketTransport(client, packet_callback=record_packet)
+            await transport.start()
+            try:
+                realtime_results: dict[str, Any] = {}
+                for metric_name in metric_names:
+                    per_metric_should_stop = metric_start_hook(metric_name) if metric_start_hook is not None else should_stop
+                    if metric_name == "health-check":
+                        samples, final_reading = await _query_health_check(
+                            transport,
+                            hard_timeout=float(duration_seconds) if duration_seconds is not None else None,
+                            stop_on_idle=duration_seconds is None and per_metric_should_stop is None,
+                            should_stop=per_metric_should_stop,
+                        )
+                        observations, realtime_results[metric_name] = _health_check_observations(samples, final_reading)
+                        if observations:
+                            database.record_realtime_observations(device_id, sync_id, observations=observations)
+                    else:
+                        samples = await _query_realtime_controlled(
+                            transport,
+                            metric_name,
+                            samples=3,
+                            duration_seconds=float(duration_seconds) if duration_seconds is not None else None,
+                            should_stop=per_metric_should_stop,
+                        )
+                        if samples:
+                            database.record_realtime_samples(
+                                device_id,
+                                sync_id,
+                                observed_at=samples[-1][2],
+                                samples=[(sample, raw_packet_hex) for sample, raw_packet_hex, _ in samples],
+                            )
+                        realtime_results[metric_name] = {
+                            "samples": len(samples),
+                            "last_timestamp": samples[-1][2] if samples else None,
+                        }
+            finally:
+                await transport.stop()
+                database.finish_sync(sync_id, finished_at=date_utils.utc_now())
+        finally:
+            await client.disconnect()
+        return {
+            "address": target.address,
+            "name": target.name,
+            "nickname": target.nickname,
+            "db_path": str(db_path),
+            "sync_id": sync_id,
+            "realtime_results": realtime_results,
+        }
+    finally:
+        database.close()
 
 
 def main() -> None:

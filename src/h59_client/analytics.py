@@ -20,6 +20,7 @@ DROP VIEW IF EXISTS analytic_blood_oxygen_intervals;
 DROP VIEW IF EXISTS analytic_blood_pressure_intervals;
 DROP VIEW IF EXISTS analytic_pressure_intervals;
 DROP VIEW IF EXISTS analytic_hrv_intervals;
+DROP VIEW IF EXISTS analytic_realtime_observations;
 DROP VIEW IF EXISTS analytic_daily_steps;
 DROP VIEW IF EXISTS analytic_daily_sleep;
 DROP VIEW IF EXISTS analytic_sleep_sessions_canonical;
@@ -147,19 +148,64 @@ SELECT
     bos.raw_packet_hex
 FROM blood_oxygen_samples AS bos;
 
-CREATE VIEW IF NOT EXISTS analytic_blood_pressure_intervals AS
+CREATE VIEW IF NOT EXISTS analytic_realtime_observations AS
 SELECT
-    bpr.blood_pressure_reading_id AS source_id,
-    bpr.device_id,
-    bpr.sync_id,
-    bpr.timestamp AS valid_from,
-    strftime('%Y-%m-%dT%H:%M:%S+00:00', unixepoch(bpr.timestamp) + (5 * 60), 'unixepoch') AS valid_to,
-    bpr.systolic,
-    bpr.diastolic,
-    ROUND((bpr.systolic + (2.0 * bpr.diastolic)) / 3.0, 1) AS mean_arterial_pressure,
-    bpr.source_command,
-    bpr.raw_packet_hex
-FROM blood_pressure_readings AS bpr;
+    rs.realtime_sample_id AS source_id,
+    rs.device_id,
+    rs.sync_id,
+    rs.timestamp AS valid_from,
+    rs.timestamp AS valid_to,
+    mc.metric_code,
+    mc.label AS metric_label,
+    mc.unit,
+    rs.value_numeric,
+    rs.value_text,
+    rs.error_code,
+    rs.source_command,
+    rs.raw_packet_hex
+FROM realtime_samples AS rs
+LEFT JOIN metric_codes AS mc
+  ON mc.metric_code_id = rs.metric_code_id;
+
+CREATE VIEW IF NOT EXISTS analytic_blood_pressure_intervals AS
+WITH historical AS (
+    SELECT
+        'historical:' || bpr.blood_pressure_reading_id AS source_id,
+        bpr.device_id,
+        bpr.sync_id,
+        bpr.timestamp AS valid_from,
+        strftime('%Y-%m-%dT%H:%M:%S+00:00', unixepoch(bpr.timestamp) + (5 * 60), 'unixepoch') AS valid_to,
+        bpr.systolic,
+        bpr.diastolic,
+        ROUND((bpr.systolic + (2.0 * bpr.diastolic)) / 3.0, 1) AS mean_arterial_pressure,
+        bpr.source_command,
+        bpr.raw_packet_hex
+    FROM blood_pressure_readings AS bpr
+),
+realtime AS (
+    SELECT
+        'realtime:' || sys.source_id AS source_id,
+        sys.device_id,
+        sys.sync_id,
+        sys.valid_from,
+        strftime('%Y-%m-%dT%H:%M:%S+00:00', unixepoch(sys.valid_from) + (5 * 60), 'unixepoch') AS valid_to,
+        CAST(sys.value_numeric AS INTEGER) AS systolic,
+        CAST(dia.value_numeric AS INTEGER) AS diastolic,
+        ROUND((CAST(sys.value_numeric AS REAL) + (2.0 * CAST(dia.value_numeric AS REAL))) / 3.0, 1) AS mean_arterial_pressure,
+        sys.source_command,
+        sys.raw_packet_hex
+    FROM analytic_realtime_observations AS sys
+    JOIN analytic_realtime_observations AS dia
+      ON dia.device_id = sys.device_id
+     AND dia.sync_id = sys.sync_id
+     AND dia.valid_from = sys.valid_from
+     AND dia.raw_packet_hex = sys.raw_packet_hex
+     AND dia.metric_code = 'health-check.diastolic'
+    WHERE sys.metric_code = 'health-check.systolic'
+)
+SELECT * FROM historical
+UNION ALL
+SELECT * FROM realtime;
 
 CREATE VIEW IF NOT EXISTS analytic_pressure_intervals AS
 SELECT

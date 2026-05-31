@@ -56,6 +56,24 @@ Incremental sync:
 h59 sync -i
 ```
 
+Run an active health check:
+
+```bash
+h59 realtime left-wrist health-check
+```
+
+Run a health check for a fixed duration:
+
+```bash
+h59 realtime left-wrist health-check --time 30s
+```
+
+Run all known realtime metrics sequentially:
+
+```bash
+h59 realtime left-wrist
+```
+
 Detached periodic incremental sync:
 
 ```bash
@@ -158,8 +176,37 @@ Common flags:
 - `--device-clock <utc|local>`
 - `--config <path>`
 - `--capture-gatt`
-- `--realtime <metric>...`
-- `--realtime-samples <n>`
+
+### `realtime`
+
+Usage:
+
+```bash
+h59 realtime <selector> [metric...]
+```
+
+Arguments:
+- `<selector>`: device selector, required
+- `[metric...]`: optional realtime metrics; if omitted, all known metrics run sequentially
+- `-t, --time <duration>`: keep each requested metric active for a fixed duration; without it, the command is interactive and waits for Enter to stop the current metric
+
+Notes:
+- `realtime` is an active live-measurement mode
+- it does not pull historical backfill; it asks the bracelet to measure now
+- the CLI does not run realtime metrics in parallel; it runs them sequentially over one BLE session
+- realtime packets are timestamped on receipt because the current live packet formats do not expose a trustworthy measurement timestamp
+- `health-check` runs the active one-key health check workflow
+- realtime observations are stored in `realtime_samples` and classified through `metric_codes`
+- analytics can derive paired systolic/diastolic blood-pressure readings from those realtime observations
+- if multiple metrics are requested, they run sequentially and the CLI prompts once per metric in interactive mode
+- if no metric is specified, the CLI tries every known realtime metric sequentially
+
+Operational flow:
+1. start the requested live metric on the bracelet
+2. collect emitted packets while the command runs
+3. decode supported values
+4. persist the results
+5. send the corresponding stop command
 
 Clock mode policy:
 - default bracelet clock mode is `utc`
