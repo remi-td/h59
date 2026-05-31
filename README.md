@@ -259,24 +259,24 @@ Research notes are kept separately so the CLI software stays clean while the rev
 ## Documentation
 
 Software documentation:
-- [CLI Guide](/Users/remi.turpaud/Code/h59/docs/software/cli.md:1)
-- [Software Architecture](/Users/remi.turpaud/Code/h59/docs/software/architecture.md:1)
-- [Architecture TODO](/Users/remi.turpaud/Code/h59/docs/software/architecture_todo.md:1)
-- [Database Design](/Users/remi.turpaud/Code/h59/docs/software/database.md:1)
-- [Dashboard Requirements](/Users/remi.turpaud/Code/h59/docs/software/dashboard_requirements.md:1)
+- [CLI Guide](docs/software/cli.md)
+- [Software Architecture](docs/software/architecture.md)
+- [Architecture TODO](docs/software/architecture_todo.md)
+- [Database Design](docs/software/database.md)
+- [Dashboard Requirements](docs/software/dashboard_requirements.md)
 
 Device research:
-- [Research Overview](/Users/remi.turpaud/Code/h59/docs/research/README.md:1)
-- [Device Protocol Map](/Users/remi.turpaud/Code/h59/docs/research/device_protocol.md:1)
-- [Historical Health Metrics Investigation](/Users/remi.turpaud/Code/h59/docs/research/health_metrics.md:1)
-- [Compatibility Mapping](/Users/remi.turpaud/Code/h59/docs/research/compatibility_mapping.md:1)
+- [Research Overview](docs/research/README.md)
+- [Device Protocol Map](docs/research/device_protocol.md)
+- [Historical Health Metrics Investigation](docs/research/health_metrics.md)
+- [Compatibility Mapping](docs/research/compatibility_mapping.md)
 
 Visualization:
-- [Dashboard README](/Users/remi.turpaud/Code/h59/dashboard/README.md:1)
-- [Visualization Layer Architecture](/Users/remi.turpaud/Code/h59/docs/software/visualisation_layer_architecture.md:1)
+- [Dashboard README](dashboard/README.md)
+- [Visualization Layer Architecture](docs/software/visualisation_layer_architecture.md)
 
 Contributor guidance:
-- [AGENT.md](/Users/remi.turpaud/Code/h59/AGENT.md:1)
+- [AGENT.md](AGENT.md)
 
 ## Repository Layout
 

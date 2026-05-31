@@ -243,4 +243,4 @@ This supports:
 ## Compatibility Mapping
 
 The external reverse-engineering base used earlier is documented separately in
-[Compatibility Mapping](/Users/remi.turpaud/Code/h59/docs/research/compatibility_mapping.md:1).
+[Compatibility Mapping](../research/compatibility_mapping.md).

@@ -3,7 +3,7 @@
 This directory now contains the primary visualization stack for `h59-local`.
 
 The design follows the separation defined in
-[Visualization Layer Architecture](/Users/remi.turpaud/Code/h59/docs/software/visualisation_layer_architecture.md:1):
+[Visualization Layer Architecture](../docs/software/visualisation_layer_architecture.md):
 
 - `h59` CLI handles BLE, protocol, sync, and SQLite storage
 - the dashboard reads the SQLite database through a small read-only API

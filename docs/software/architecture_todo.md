@@ -5,7 +5,7 @@ the software architecture.
 
 Source architecture:
 
-- [Software Architecture](/Users/remi.turpaud/Code/h59/docs/software/architecture.md:1)
+- [Software Architecture](architecture.md)
 
 ## Completed
 

@@ -46,9 +46,9 @@ def test_build_parser_supports_device_clock_override():
 
 def test_build_parser_supports_realtime_control_arguments():
     parser = build_parser()
-    args = parser.parse_args(["realtime", "remi", "health-check", "-t", "30s"])
+    args = parser.parse_args(["realtime", "demo-band", "health-check", "-t", "30s"])
     assert args.command == "realtime"
-    assert args.selector == "remi"
+    assert args.selector == "demo-band"
     assert args.metrics == ["health-check"]
     assert args.time == 30
 

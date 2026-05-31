@@ -5,9 +5,9 @@ This section contains reverse-engineering results for the H59 device itself.
 It is intentionally separate from the CLI software documentation.
 
 Current research documents:
-- [Device Protocol Map](/Users/remi.turpaud/Code/h59/docs/research/device_protocol.md:1)
-- [Historical Health Metrics Investigation](/Users/remi.turpaud/Code/h59/docs/research/health_metrics.md:1)
-- [Compatibility Mapping](/Users/remi.turpaud/Code/h59/docs/research/compatibility_mapping.md:1)
+- [Device Protocol Map](device_protocol.md)
+- [Historical Health Metrics Investigation](health_metrics.md)
+- [Compatibility Mapping](compatibility_mapping.md)
 
 The goal of these notes is to explain:
 - which transports and commands are in use

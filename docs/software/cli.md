@@ -47,7 +47,7 @@ Specific device sync:
 ```bash
 h59 sync 1
 h59 sync left-wrist
-h59 sync 86B9D8D4-6CB2-E24D-815D-A141786F427B
+h59 sync 11111111-2222-3333-4444-555555555555
 ```
 
 Incremental sync:

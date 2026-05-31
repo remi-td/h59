@@ -11,7 +11,7 @@ def test_resolve_single_target_prefers_known_device_without_discovery(tmp_path, 
     db = H59Database(db_path)
     db.upsert_device(
         address="AA-BB",
-        name="H59_7407",
+        name="H59_SAMPLE",
         advertisement=None,
         hw_version=None,
         fw_version=None,
@@ -26,7 +26,7 @@ def test_resolve_single_target_prefers_known_device_without_discovery(tmp_path, 
 
     target = asyncio.run(resolve_single_target(db_path=str(db_path), selector=None, name="H59", scan_timeout=1.0))
     assert target.address == "AA-BB"
-    assert target.name == "H59_7407"
+    assert target.name == "H59_SAMPLE"
 
 
 def test_resolve_single_target_with_explicit_wrong_name_does_not_use_unrelated_known_device(tmp_path, monkeypatch):
@@ -34,7 +34,7 @@ def test_resolve_single_target_with_explicit_wrong_name_does_not_use_unrelated_k
     db = H59Database(db_path)
     db.upsert_device(
         address="AA-BB",
-        name="H59_7407",
+        name="H59_SAMPLE",
         advertisement=None,
         hw_version=None,
         fw_version=None,
@@ -59,9 +59,9 @@ def test_discover_h59_devices_respects_non_generic_name_filter(monkeypatch):
     async def fake_discover(*args, **kwargs):
         return {
             "one": (
-                SimpleNamespace(address="AA-BB", name="H59_7407"),
+                SimpleNamespace(address="AA-BB", name="H59_SAMPLE"),
                 SimpleNamespace(
-                    local_name="H59_7407",
+                    local_name="H59_SAMPLE",
                     service_uuids=["0000fe00-0000-1000-8000-00805f9b34fb"],
                     manufacturer_data={0x004C: bytes.fromhex("fee73031")},
                     service_data={},
@@ -82,7 +82,7 @@ def test_discover_h59_devices_respects_non_generic_name_filter(monkeypatch):
 def test_looks_like_device_address_supports_mac_and_uuid():
     assert looks_like_device_address("AA:BB:CC:DD:EE:FF") is True
     assert looks_like_device_address("AA-BB-CC-DD-EE-FF") is True
-    assert looks_like_device_address("86B9D8D4-6CB2-E24D-815D-A141786F427B") is True
+    assert looks_like_device_address("11111111-2222-3333-4444-555555555555") is True
     assert looks_like_device_address("wristband") is False
     assert looks_like_device_address("2") is False
 
@@ -108,9 +108,9 @@ def test_resolve_single_target_allows_direct_address_selector(tmp_path):
     target = asyncio.run(
         resolve_single_target(
             db_path=str(db_path),
-            selector="86B9D8D4-6CB2-E24D-815D-A141786F427B",
+            selector="11111111-2222-3333-4444-555555555555",
             name="H59",
             scan_timeout=1.0,
         )
     )
-    assert target.address == "86B9D8D4-6CB2-E24D-815D-A141786F427B"
+    assert target.address == "11111111-2222-3333-4444-555555555555"

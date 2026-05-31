@@ -180,3 +180,35 @@ Proven on 2026-05-30:
 - realtime `0x69 / dataType=2` does not emit final systolic/diastolic values on this bracelet
 - normal historical `sync` traffic does not currently expose any additional paired-BP command beyond the known history set (`1`, `3`, `21`, `22`, `39`, `42`, `47`, `55`, `57`, `67`)
 - the only unmapped historical reply seen in captured sync traffic is a fixed `0x2f` packet, not a timestamped measurement series
+
+Proven on 2026-05-31:
+- `Settings ID 12` decodes as an hourly blood-pressure auto-measure configuration:
+  - enabled = `1`
+  - time range = `00:00 -> 23:00`
+  - multiple = `60`
+- this strongly suggests the bracelet exposes at least some writable scheduling/configuration surface for automatic measurement, worth exploring later as a separate device-configuration feature
+- by shape alone, `Settings ID 22` (heart rate) also looks interval-configurable, while `44`, `54`, and `56` currently look more like enable/disable toggles than interval settings
+- direct `cmd 20` probes still returned nothing, even when timestamps were encoded using local-wall-clock semantics
+- a clean retry of `cmd 13` with explicit settling and direct-address reconnect showed only explicit no-data (`0dff...`) for:
+  - empty payload
+  - simple subtypes `0`, `1`, `2`
+  - interval-like payloads (`30`, `60`)
+  - decimal and BCD day/date payloads for today, yesterday, two days ago, and five days ago
+- the earlier apparent two-packet `cmd 13` result was most likely polluted by overlapping async traffic from other commands in the same probe session
+- `cmd 14` did not unlock any additional BP-history packets
+- a UART neighborhood sweep around the known historical-series commands found:
+  - `50`..`53` returning explicit `0xee` no-data
+  - `58` producing no response
+  - `59` echoing the request payload only
+  - `60` returning the same fixed packet for every tested payload:
+    - `3c00400020000000000000000000009c`
+  - `61`, `63`, `64`, `65`, and `66` returning explicit `0xee` no-data
+- a broader payload-shape probe on `cmd 60` showed the same fixed response for:
+  - one-byte selectors
+  - two-byte index-like payloads
+  - decimal and BCD date payloads
+  - interval-tagged variants
+- a wider undocumented Big Data scan found:
+  - a few short non-empty payloads at `44`, `67 -> 68`, and `90`
+  - a uniform one-byte body `40` for every tested id `91..140`
+- none of those Big Data responses looked like an hourly paired systolic/diastolic history stream

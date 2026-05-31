@@ -102,16 +102,59 @@ Assessment:
 
 Result:
 - capability flags and settings indicate support
+- a live `Settings ID 12` read on 2026-05-31 returned:
+  - `0c0101000017003c0000000000000061`
+  - decoded as:
+    - enabled = `1`
+    - time range = `00:00 -> 23:00`
+    - multiple = `60`
+- that settings payload is consistent with the vendor app's observed hourly blood-pressure auto-measure behavior
 - the direct `0x69 / dataType=2` realtime path did not produce usable systolic/diastolic values
 - direct timestamped `0x14` historical probes produced no responses during the 2026-05-27 live test
 - `0x69` data requests for blood pressure only acknowledged with zero-valued `0x69` responses
 - a fresh live probe on 2026-05-30 still produced no `cmd 20` blood-pressure history packets
+- a fresh live probe on 2026-05-31 still produced no `cmd 20` blood-pressure packets, even when the request timestamp was encoded using local wall-clock semantics instead of plain Unix time
+- a cleaner retry on 2026-05-31, with explicit per-command settling and direct-address reconnect, showed `cmd 13` returning only explicit no-data for:
+  - empty payload
+  - simple subtypes `0`, `1`, `2`
+  - interval-like payloads (`30`, `60`)
+  - day/date-shaped payloads for today, yesterday, two days ago, and five days ago, in both decimal and BCD encodings
+  - all of those variants returned:
+    - `0dff000000000000000000000000000c`
+- the earlier apparent two-packet `cmd 13` result was most likely polluted by overlapping async traffic from other commands in the same probe session
+- `cmd 14` did not unlock further BP history:
+  - `0e00...` elicited `0dff...`
+  - `0eff...` produced no useful follow-on packets
 - a full review of the `raw_packets` captured by normal `sync` on 2026-05-31 showed only these historical command ids:
   - `1`, `3`, `21`, `22`, `39`, `42`, `47`, `55`, `57`, `67`
 - the only unmapped historical response was a fixed one-packet `0x2f` reply (`2ff40000000000000000000000000023`) once per sync; it carries no timestamped series structure and does not resemble paired BP values
 - no captured database, including archived pre-reset databases, contains any `command_id=20` raw packet at all
 - a fresh live probe on 2026-05-30 confirmed that `0x69 / dataType=2` exposes only a live cuff-pressure-like value in bytes `6..7`
 - a fresh live probe on 2026-05-30 confirmed that `0x69 / dataType=5` (`HealthCheck`) emits the final blood-pressure result near the end of the measurement window
+- a wider Big Data scan on 2026-05-31 found a few additional undocumented ids with short non-empty payloads:
+  - `44` returned body `01 00`
+  - request `67` triggered a response with `dataId=68` and body `01 01 01 00 00 00`
+  - `90` returned body `01 01 06`
+- none of those undocumented Big Data payloads looked like an hourly paired systolic/diastolic series
+- a focused UART sweep around the known historical-series neighborhood on 2026-05-31 found:
+  - `50`..`53` returning explicit `0xee` no-data packets
+  - `55` and `57` behaving as the known pressure/stress and HRV history endpoints
+  - `58` producing no response
+  - `59` simply echoing the request payload back, with no evidence of hidden data
+  - `60` returning the same fixed packet regardless of payload:
+    - `3c00400020000000000000000000009c`
+  - `61`, `63`, `64`, `65`, and `66` returning explicit `0xee` no-data packets
+- a payload-shape probe on `cmd 60` using:
+  - one-byte selectors
+  - two-byte index-like payloads
+  - decimal and BCD date payloads
+  - interval-tagged variants
+  always returned the same fixed packet:
+  - `3c00400020000000000000000000009c`
+  so `cmd 60` does not currently look like an hourly BP-history feed
+- a follow-up Big Data scan over ids `91..140`, after the BP settings preread and `cmd 60`, returned the same one-byte body `40` for every tested id:
+  - response shape `bc<ID>0100bf4000`
+  - that uniform pattern does not resemble a stored hourly systolic/diastolic series
 - decoded `HealthCheck` packet layout:
   - byte `3`: diastolic
   - byte `4`: systolic
@@ -125,8 +168,11 @@ Result:
 Assessment:
 - active blood-pressure measurement is now proven and decoded through `HealthCheck`
 - the local data model now stores separate systolic and diastolic values
+- the bracelet itself confirms hourly BP auto-measure is configured, so the missing history is almost certainly stored on-device somewhere
 - the direct `dataType=2` path should be treated as a lower-level cuff-pressure stream, not as a finished BP reading
 - the normal historical sync payload currently shows no hidden paired-BP stream waiting to be decoded
+- the `cmd 13`, `cmd 14`, `cmd 20`, `cmd 59`, `cmd 60`, and Big Data `91..140` probes still did not reveal the hourly BP history
+- the most likely remaining explanation is still an undiscovered vendor-only fetch path, rather than a trivial remapping of `pressure_samples` or the currently captured Big Data ids
 - historical blood-pressure backfill is still unresolved
 
 ### History Retention and Gap Recovery
