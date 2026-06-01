@@ -50,23 +50,36 @@ from h59_client.config import (
 from h59_client.devices import discover_and_store_targets
 from h59_client.report import render_health_dashboard_report
 from h59_client.storage import H59Database
-from h59_client.sync import realtime_h59, sync_h59
+from h59_client.sync import ONE_SHOT_REALTIME_METRICS, realtime_h59, sync_h59
 
 
 logger = logging.getLogger(__name__)
 DEFAULT_DISCOVERY_NAME = "H59"
 REALTIME_METRIC_CHOICES = (
-    "heart-rate",
-    "blood-pressure",
     "spo2",
     "fatigue",
     "health-check",
     "ecg",
     "pressure",
-    "blood-sugar",
-    "hrv",
 )
 PERIODIC_SETTING_CHOICES = ("blood-pressure", "spo2", "stress", "hrv")
+REALTIME_CAPABILITY_FLAGS = {
+    "blood-pressure": "support_blood_pressure",
+    "spo2": "support_spo2",
+    "health-check": "support_one_key_check",
+    "pressure": "support_pressure",
+    "hrv": "support_hrv",
+}
+REALTIME_METRICS_HELP = (
+    "realtime metrics to run; supported: "
+    + ", ".join(REALTIME_METRIC_CHOICES)
+    + ". If omitted, all known metrics run sequentially. "
+    + "`health-check` and `spo2` are one-shot measurements and ignore `--time` / Enter-to-stop control."
+)
+REALTIME_TIME_HELP = (
+    "run each requested non-one-shot realtime metric for a fixed duration; "
+    "without it, non-one-shot metrics are interactive and wait for Enter to stop"
+)
 
 
 def format_operational_error(exc: Exception) -> str | None:
@@ -461,6 +474,33 @@ def validate_realtime_metrics(metrics: list[str]) -> list[str]:
     return metrics
 
 
+def resolve_realtime_capabilities(db_path: str, selector: str) -> dict[str, Any] | None:
+    database = H59Database(db_path)
+    try:
+        row = database.get_device_by_selector(selector)
+        if row is None:
+            return None
+        return database.get_latest_capabilities(int(row["device_id"]))
+    finally:
+        database.close()
+
+
+def filter_realtime_metrics_for_capabilities(
+    metrics: list[str], capabilities: dict[str, Any] | None
+) -> tuple[list[str], list[str]]:
+    if not capabilities:
+        return metrics, []
+    supported: list[str] = []
+    unsupported: list[str] = []
+    for metric in metrics:
+        flag = REALTIME_CAPABILITY_FLAGS.get(metric)
+        if flag is not None and capabilities.get(flag) is False:
+            unsupported.append(metric)
+        else:
+            supported.append(metric)
+    return supported, unsupported
+
+
 def run_foreground_sync(args: argparse.Namespace) -> int:
     device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
     realtime_should_stop = None
@@ -641,20 +681,35 @@ def handle_sync(args: argparse.Namespace) -> int:
 
 
 def handle_realtime(args: argparse.Namespace) -> int:
-    metrics = validate_realtime_metrics(args.metrics or list(REALTIME_METRIC_CHOICES))
+    requested_metrics = validate_realtime_metrics(args.metrics or list(REALTIME_METRIC_CHOICES))
+    capabilities = resolve_realtime_capabilities(args.db, args.selector)
+    metrics, unsupported = filter_realtime_metrics_for_capabilities(requested_metrics, capabilities)
+    if unsupported and args.metrics:
+        raise SystemExit(
+            "Realtime metric(s) not supported by this band according to the latest capability snapshot: "
+            + ", ".join(unsupported)
+        )
+    if unsupported:
+        print(
+            "Skipping realtime metrics not supported by this band according to the latest capability snapshot: "
+            + ", ".join(unsupported)
+        )
+    if not metrics:
+        raise SystemExit("No supported realtime metrics remain for this band.")
+    interactive_metrics = [metric for metric in metrics if metric not in ONE_SHOT_REALTIME_METRICS]
     interactive = args.time is None
-    if interactive and len(metrics) > 1:
+    if interactive and len(interactive_metrics) > 1:
         print("Realtime metrics will run sequentially over a single BLE session. Press Enter to stop each metric and continue to the next.")
         metric_start_hook = _keypress_stop_factory
         stop_callback = None
-    elif interactive:
+    elif interactive and interactive_metrics:
         metric_start_hook = _keypress_stop_factory
         stop_callback = None
     else:
         metric_start_hook = None
         stop_callback = None
-        print(f"Realtime measurement running for {args.time} seconds per metric.")
-
+        if args.time is not None and interactive_metrics:
+            print(f"Realtime measurement running for {args.time} seconds per metric.")
     sample_callback = print_realtime_sample if args.stdout else None
     result = asyncio.run(
         realtime_h59(
@@ -1118,8 +1173,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     realtime_parser = subparsers.add_parser("realtime", help="run active live measurements without performing a history sync")
     add_target_arguments(realtime_parser, selector_required=True)
-    realtime_parser.add_argument("metrics", nargs="*", help="realtime metrics to run; defaults to all known metrics")
-    realtime_parser.add_argument("-t", "--time", type=parse_duration, help="run each realtime metric for a fixed duration; defaults to interactive mode until Enter")
+    realtime_parser.add_argument("metrics", nargs="*", metavar="metric", help=REALTIME_METRICS_HELP)
+    realtime_parser.add_argument("-t", "--time", type=parse_duration, help=REALTIME_TIME_HELP)
     realtime_parser.add_argument("--stdout", action="store_true", help="print live samples to the terminal and do not persist them to SQLite")
     realtime_parser.set_defaults(handler=handle_realtime)
 

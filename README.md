@@ -140,18 +140,22 @@ Realtime mode:
 - `h59 realtime <selector>` is the active live-measurement command
 - `sync` is for historical capture and synchronization
 - `realtime` starts one live measurement at a time, collects packets, stores supported observations, and then stops the measurement
+- supported realtime metrics are: `spo2`, `fatigue`, `health-check`, `ecg`, and `pressure`
+- metrics explicitly marked unsupported by the bracelet's latest capability snapshot are rejected if requested directly and skipped from the default no-metric run
 - requested realtime metrics are run sequentially on one BLE session, not in parallel
 - realtime packets do not currently expose a trustworthy measurement timestamp, so they are timestamped with host receipt time
 - `health-check` is currently the only proven path for capturing a finished blood-pressure reading on this H59
+- `health-check` and `spo2` are treated as one-shot workflows: they run until the bracelet finishes the measurement, then return
+- for `health-check` and `spo2`, `--time` and interactive Enter-to-stop control are ignored
+- on this tested band, `health-check` is the only realtime metric currently proven to yield a useful decoded result; the remaining listed realtime endpoints should be treated as experimental probing surfaces
 - realtime observations are stored in `realtime_samples` and classified through `metric_codes`
 - analytics may denormalize selected realtime observations, such as health-check systolic/diastolic pairs, into consumer-facing metric views
 - `--stdout` switches realtime into terminal-only mode: live samples are printed as they arrive and nothing is written to SQLite
 - in `--stdout` mode there is no new `sync_id`, no `realtime_samples` insert, and no raw-packet persistence
-- by default, `health-check` auto-stops using the current packet/idle heuristic
 - `h59 realtime <selector>` with no metric runs all known realtime metrics sequentially
 - the default no-metric behavior is therefore: try every known realtime metric, one after another
-- with no `--time`, realtime runs interactively and waits for Enter before stopping the current metric
-- use `--time <duration>` or `-t <duration>` to keep the current metric active for a fixed window
+- with no `--time`, non-`health-check` realtime metrics run interactively and wait for Enter before stopping the current metric
+- use `--time <duration>` or `-t <duration>` to keep non-`health-check` metrics active for a fixed window
 
 Example:
 
@@ -162,6 +166,8 @@ h59 realtime left-wrist health-check
 ```bash
 h59 realtime left-wrist health-check --time 30s
 ```
+
+The `--time` value is ignored for `health-check` and `spo2`, because the bracelet decides when those one-shot measurements are complete.
 
 ```bash
 h59 realtime left-wrist
@@ -175,7 +181,8 @@ This:
 - connects to the bracelet
 - starts the requested live measurement workflow
 - if no metric is specified, iterates through all known realtime metrics sequentially
-- keeps the workflow active according to the selected stop mode
+- keeps non-one-shot metrics active according to the selected stop mode
+- lets `health-check` and `spo2` run to device-defined completion
 - by default, stores the resulting live observations in `realtime_samples`
 - with `--stdout`, prints live samples to the terminal instead and leaves the SQLite database untouched
 - lets analytics derive a paired systolic/diastolic blood-pressure reading from persisted live observations

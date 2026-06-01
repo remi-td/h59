@@ -1352,6 +1352,21 @@ class H59Database:
         )
         self.connection.commit()
 
+    def get_latest_capabilities(self, device_id: int) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """
+            SELECT capabilities_json
+            FROM capability_snapshots
+            WHERE device_id=?
+            ORDER BY timestamp DESC, capability_snapshot_id DESC
+            LIMIT 1
+            """,
+            (device_id,),
+        ).fetchone()
+        if row is None or row["capabilities_json"] is None:
+            return None
+        return json.loads(str(row["capabilities_json"]))
+
     def record_realtime_samples(
         self,
         device_id: int,

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import signal
+from typing import Any
 
 from bleak.exc import BleakError
 import pytest
@@ -12,13 +13,16 @@ from h59_client.cli import (
     build_parser,
     default_db_path,
     default_state_dir,
+    filter_realtime_metrics_for_capabilities,
     format_daemon_operational_notice,
     format_operational_error,
     handle_daemon_stop,
     main,
     parse_duration,
+    resolve_realtime_capabilities,
     resolve_runtime_paths,
 )
+from h59_client.storage import H59Database
 
 
 def test_parse_duration_accepts_seconds_and_suffixes():
@@ -233,6 +237,151 @@ def test_build_parser_supports_realtime_command_without_metrics():
     assert args.selector == "left-wrist"
     assert args.metrics == []
     assert args.time is None
+
+
+def test_realtime_help_lists_supported_metrics_and_health_check_behavior():
+    parser = build_parser()
+    realtime_parser = next(
+        action.choices["realtime"]
+        for action in parser._actions
+        if getattr(action, "choices", None) and "realtime" in action.choices
+    )
+    help_text = " ".join(realtime_parser.format_help().split())
+    assert "spo2, fatigue, health-check, ecg, pressure" in help_text
+    assert "one-shot measurements" in help_text
+    assert "`health-check` and `spo2`" in help_text
+
+
+def test_filter_realtime_metrics_for_capabilities_rejects_explicitly_unsupported_metrics():
+    supported, unsupported = filter_realtime_metrics_for_capabilities(
+        ["pressure", "health-check", "spo2"],
+        {
+            "support_pressure": False,
+            "support_one_key_check": True,
+            "support_spo2": True,
+        },
+    )
+    assert supported == ["health-check", "spo2"]
+    assert unsupported == ["pressure"]
+
+
+def test_resolve_realtime_capabilities_uses_latest_snapshot_for_selected_device(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-06-01T08:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-06-01T08:00:00+00:00", source="test")
+    db.record_capabilities(
+        device_id,
+        sync_id,
+        timestamp="2026-06-01T08:00:01+00:00",
+        capabilities={"support_pressure": False, "support_spo2": True},
+        raw_packet_hex="01",
+    )
+    db.close()
+
+    capabilities = resolve_realtime_capabilities(str(tmp_path / "h59.sqlite"), "AA-BB")
+    assert capabilities == {"support_pressure": False, "support_spo2": True}
+
+
+def test_handle_realtime_health_check_ignores_time_and_interactive_control(monkeypatch, capsys):
+    import h59_client.cli as cli_module
+
+    captured: dict[str, Any] = {}
+
+    async def fake_realtime_h59(**kwargs):
+        captured.update(kwargs)
+        return {
+            "address": "00000000-0000-0000-0000-000000000001",
+            "name": "Demo Band",
+            "nickname": "demo",
+            "db_path": kwargs["db_path"],
+            "sync_id": 1,
+            "persisted": True,
+            "realtime_results": {"health-check": {"packets": 1, "final_result": None}},
+        }
+
+    monkeypatch.setattr(cli_module, "realtime_h59", fake_realtime_h59)
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "demo-band", "health-check", "--time", "30s"])
+
+    assert cli_module.handle_realtime(args) == 0
+    assert captured["metric_names"] == ["health-check"]
+    assert captured["duration_seconds"] == 30
+    assert captured["metric_start_hook"] is None
+    assert captured["should_stop"] is None
+
+    output = capsys.readouterr().out
+    assert "30 seconds per metric" not in output
+
+
+def test_handle_realtime_spo2_ignores_time_and_interactive_control(monkeypatch, capsys):
+    import h59_client.cli as cli_module
+
+    captured: dict[str, Any] = {}
+
+    async def fake_realtime_h59(**kwargs):
+        captured.update(kwargs)
+        return {
+            "address": "00000000-0000-0000-0000-000000000001",
+            "name": "Demo Band",
+            "nickname": "demo",
+            "db_path": kwargs["db_path"],
+            "sync_id": 1,
+            "persisted": True,
+            "realtime_results": {"spo2": {"samples": 0, "last_timestamp": None}},
+        }
+
+    monkeypatch.setattr(cli_module, "realtime_h59", fake_realtime_h59)
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "demo-band", "spo2", "--time", "30s"])
+
+    assert cli_module.handle_realtime(args) == 0
+    assert captured["metric_names"] == ["spo2"]
+    assert captured["duration_seconds"] == 30
+    assert captured["metric_start_hook"] is None
+    assert captured["should_stop"] is None
+
+    output = capsys.readouterr().out
+    assert "30 seconds per metric" not in output
+
+
+def test_handle_realtime_rejects_explicit_unsupported_metric_from_capabilities(monkeypatch, tmp_path):
+    import h59_client.cli as cli_module
+
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-06-01T08:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-06-01T08:00:00+00:00", source="test")
+    db.record_capabilities(
+        device_id,
+        sync_id,
+        timestamp="2026-06-01T08:00:01+00:00",
+        capabilities={"support_pressure": False},
+        raw_packet_hex="01",
+    )
+    db.close()
+
+    async def fail_realtime_h59(**_kwargs):
+        raise AssertionError("unsupported metrics should be rejected before realtime_h59 is called")
+
+    monkeypatch.setattr(cli_module, "realtime_h59", fail_realtime_h59)
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "--db", str(tmp_path / "h59.sqlite"), "AA-BB", "pressure"])
+
+    with pytest.raises(SystemExit, match="not supported by this band"):
+        cli_module.handle_realtime(args)
 
 
 def test_archive_db_path_formats_expected_name(tmp_path):

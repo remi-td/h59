@@ -193,8 +193,8 @@ h59 realtime --stdout left-wrist health-check
 
 Arguments:
 - `<selector>`: device selector, required
-- `[metric...]`: optional realtime metrics; if omitted, all known metrics run sequentially
-- `-t, --time <duration>`: keep each requested metric active for a fixed duration; without it, the command is interactive and waits for Enter to stop the current metric
+- `[metric...]`: optional realtime metrics. Supported values: `spo2`, `fatigue`, `health-check`, `ecg`, `pressure`. If omitted, all known metrics run sequentially
+- `-t, --time <duration>`: keep each requested non-one-shot realtime metric active for a fixed duration; without it, non-one-shot metrics are interactive and wait for Enter to stop
 - `--stdout`: print live samples to the terminal and skip all SQLite persistence for the realtime run
 
 Notes:
@@ -203,10 +203,13 @@ Notes:
 - the CLI does not run realtime metrics in parallel; it runs them sequentially over one BLE session
 - realtime packets are timestamped on receipt because the current live packet formats do not expose a trustworthy measurement timestamp
 - `health-check` runs the active one-key health check workflow
+- `health-check` and `spo2` are treated as one-shot measurements: they run until the bracelet finishes and ignore `--time` and Enter-to-stop control
+- metrics explicitly marked unsupported by the bracelet's latest capability snapshot are rejected if requested directly and skipped from the default no-metric run
+- on the tested H59 band, `health-check` is currently the only realtime metric proven to yield a useful decoded result; the other listed realtime endpoints should be treated as experimental probing surfaces
 - by default, realtime observations are stored in `realtime_samples` and classified through `metric_codes`
 - analytics can derive paired systolic/diastolic blood-pressure readings from those persisted realtime observations
 - `--stdout` disables those writes entirely: no `sync_id`, no `realtime_samples`, and no raw-packet inserts
-- if multiple metrics are requested, they run sequentially and the CLI prompts once per metric in interactive mode
+- if multiple metrics are requested, they run sequentially and the CLI prompts once per non-one-shot metric in interactive mode
 - if no metric is specified, the CLI tries every known realtime metric sequentially
 
 Operational flow:

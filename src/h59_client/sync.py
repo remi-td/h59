@@ -54,6 +54,7 @@ from h59_client.storage import RealtimeObservation
 
 INITIAL_BACKFILL_MAX_DAYS = 60
 INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS = 2
+ONE_SHOT_REALTIME_METRICS = frozenset({"health-check", "spo2"})
 
 
 def device_clock_now(mode: str) -> datetime:
@@ -174,33 +175,44 @@ async def _query_realtime_controlled(
     *,
     samples: int,
     duration_seconds: float | None = None,
+    hard_timeout: float | None = None,
+    stop_on_idle: bool = False,
     should_stop: Callable[[], bool] | None = None,
+    idle_timeout: float = 5.0,
     poll_timeout: float = 1.0,
     on_sample: Callable[[str, dict[str, Any]], None] | None = None,
 ):
-    if duration_seconds is None and should_stop is None:
+    if duration_seconds is None and should_stop is None and hard_timeout is None and not stop_on_idle:
         return await _query_realtime(transport, metric_name, samples=samples)
 
     metric = REALTIME_NAME_MAP[metric_name]
     await transport.send_packet(start_realtime_packet(metric))
     out = []
     started = asyncio.get_running_loop().time()
+    last_packet_at = started
     try:
         while True:
             if should_stop is not None and should_stop():
                 break
             if duration_seconds is not None and (asyncio.get_running_loop().time() - started) >= duration_seconds:
                 break
+            if hard_timeout is not None and (asyncio.get_running_loop().time() - started) >= hard_timeout:
+                break
             remaining = poll_timeout
             if duration_seconds is not None:
                 remaining = min(remaining, max(0.1, duration_seconds - (asyncio.get_running_loop().time() - started)))
+            if hard_timeout is not None:
+                remaining = min(remaining, max(0.1, hard_timeout - (asyncio.get_running_loop().time() - started)))
             try:
                 packet, observed_at = (await transport.read_command_packets(CMD_START_REAL_TIME, expected=1, timeout=remaining))[0]
             except TimeoutError:
+                if stop_on_idle and out and asyncio.get_running_loop().time() - last_packet_at >= idle_timeout:
+                    break
                 continue
             parsed = parse_realtime_packet(packet)
             raw_packet_hex = packet.hex()
             out.append((parsed, raw_packet_hex, observed_at))
+            last_packet_at = asyncio.get_running_loop().time()
             if on_sample is not None:
                 on_sample(
                     metric_name,
@@ -555,9 +567,9 @@ async def sync_one_h59(
                         if metric_name == "health-check":
                             samples, final_reading = await _query_health_check(
                                 transport,
-                                hard_timeout=None if realtime_should_stop is not None and realtime_duration_seconds is None else float(realtime_duration_seconds) if realtime_duration_seconds is not None else 40.0,
-                                stop_on_idle=not (realtime_should_stop is not None or realtime_duration_seconds is not None),
-                                should_stop=realtime_should_stop,
+                                hard_timeout=40.0,
+                                stop_on_idle=True,
+                                should_stop=None,
                             )
                             observations, realtime_results["health-check"] = _health_check_observations(samples, final_reading)
                             if observations:
@@ -566,6 +578,27 @@ async def sync_one_h59(
                                     sync_id,
                                     observations=observations,
                                 )
+                            continue
+                        if metric_name == "spo2":
+                            samples = await _query_realtime_controlled(
+                                transport,
+                                metric_name,
+                                samples=3,
+                                hard_timeout=40.0,
+                                stop_on_idle=True,
+                            )
+                            if samples:
+                                observed_at = samples[-1][2]
+                                database.record_realtime_samples(
+                                    device_id,
+                                    sync_id,
+                                    observed_at=observed_at,
+                                    samples=[(sample, raw_packet_hex) for sample, raw_packet_hex, _ in samples],
+                                )
+                                realtime_results[metric_name] = {
+                                    "samples": len(samples),
+                                    "last_timestamp": observed_at,
+                                }
                             continue
                         samples = await _query_realtime_controlled(
                             transport,
@@ -736,25 +769,26 @@ async def realtime_h59(
             try:
                 realtime_results: dict[str, Any] = {}
                 for metric_name in metric_names:
-                    per_metric_should_stop = metric_start_hook(metric_name) if metric_start_hook is not None else should_stop
                     if metric_name == "health-check":
                         samples, final_reading = await _query_health_check(
                             transport,
-                            hard_timeout=float(duration_seconds) if duration_seconds is not None else None,
-                            stop_on_idle=duration_seconds is None and per_metric_should_stop is None,
-                            should_stop=per_metric_should_stop,
+                            hard_timeout=40.0,
+                            stop_on_idle=True,
+                            should_stop=None,
                             on_sample=on_sample,
                         )
                         observations, realtime_results[metric_name] = _health_check_observations(samples, final_reading)
                         if database is not None and observations:
                             database.record_realtime_observations(device_id, sync_id, observations=observations)
-                    else:
+                        continue
+                    if metric_name == "spo2":
                         samples = await _query_realtime_controlled(
                             transport,
                             metric_name,
                             samples=3,
-                            duration_seconds=float(duration_seconds) if duration_seconds is not None else None,
-                            should_stop=per_metric_should_stop,
+                            hard_timeout=40.0,
+                            stop_on_idle=True,
+                            should_stop=None,
                             on_sample=on_sample,
                         )
                         if database is not None and samples:
@@ -768,6 +802,27 @@ async def realtime_h59(
                             "samples": len(samples),
                             "last_timestamp": samples[-1][2] if samples else None,
                         }
+                        continue
+                    per_metric_should_stop = metric_start_hook(metric_name) if metric_start_hook is not None else should_stop
+                    samples = await _query_realtime_controlled(
+                        transport,
+                        metric_name,
+                        samples=3,
+                        duration_seconds=float(duration_seconds) if duration_seconds is not None else None,
+                        should_stop=per_metric_should_stop,
+                        on_sample=on_sample,
+                    )
+                    if database is not None and samples:
+                        database.record_realtime_samples(
+                            device_id,
+                            sync_id,
+                            observed_at=samples[-1][2],
+                            samples=[(sample, raw_packet_hex) for sample, raw_packet_hex, _ in samples],
+                        )
+                    realtime_results[metric_name] = {
+                        "samples": len(samples),
+                        "last_timestamp": samples[-1][2] if samples else None,
+                    }
             finally:
                 await transport.stop()
                 if database is not None and sync_id is not None:

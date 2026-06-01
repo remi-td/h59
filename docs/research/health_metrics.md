@@ -192,6 +192,32 @@ Assessment:
 - the most likely remaining explanation is still an undiscovered vendor-only fetch path, rather than a trivial remapping of `pressure_samples` or the currently captured Big Data ids
 - historical blood-pressure backfill is still unresolved
 
+### Realtime Endpoint Sweep (2026-06-01)
+
+Result:
+- live probes were run against the bracelet with `h59 realtime --stdout ... --time 6s`
+- `health-check` remained the only realtime endpoint that produced a useful decoded result
+- the following realtime endpoints all returned zero-only streams during the probe:
+  - `heart-rate`
+  - `blood-pressure`
+  - `spo2`
+  - `fatigue`
+  - `ecg`
+  - `pressure`
+  - `hrv`
+- the latest capability snapshot on this band reports:
+  - `support_blood_pressure = true`
+  - `support_spo2 = true`
+  - `support_pressure = true`
+  - `support_hrv = true`
+  - `support_one_key_check = true`
+  - `support_blood_sugar = false`
+
+Assessment:
+- capability support does not imply a useful or decoded realtime endpoint on this band
+- `blood-sugar` is explicitly unsupported by the bracelet capability snapshot and should be rejected by the CLI
+- the other zero-only realtime endpoints should remain available only as experimental probing surfaces until a useful decode or activation sequence is proven
+
 ### History Retention and Gap Recovery
 
 Result:

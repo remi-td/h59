@@ -139,3 +139,123 @@ def test_realtime_h59_stdout_mode_skips_database_persistence(monkeypatch, tmp_pa
             },
         )
     ]
+
+
+def test_realtime_h59_health_check_runs_as_one_shot(monkeypatch, tmp_path):
+    import h59_client.sync as sync_module
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.disconnected = False
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    class FakeTransport:
+        def __init__(self, _client, packet_callback=None) -> None:
+            self.packet_callback = packet_callback
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def fake_resolve_single_target(**_kwargs):
+        return DeviceTarget(address="00000000-0000-0000-0000-000000000001", name="Demo Band", nickname="demo")
+
+    async def fake_connect_target(_target, *, timeout=20.0):
+        assert timeout == 20.0
+        return FakeClient()
+
+    async def fake_read_device_versions(_client):
+        return ("HW", "FW")
+
+    captured: dict[str, object] = {}
+
+    async def fake_query_health_check(_transport, **kwargs):
+        captured.update(kwargs)
+        return ([], None)
+
+    monkeypatch.setattr(sync_module, "resolve_single_target", fake_resolve_single_target)
+    monkeypatch.setattr(sync_module, "connect_target", fake_connect_target)
+    monkeypatch.setattr(sync_module, "PacketTransport", FakeTransport)
+    monkeypatch.setattr(sync_module, "read_device_versions", fake_read_device_versions)
+    monkeypatch.setattr(sync_module, "_query_health_check", fake_query_health_check)
+
+    result = asyncio.run(
+        realtime_h59(
+            db_path=tmp_path / "persist.sqlite",
+            selector="demo-band",
+            metric_names=["health-check"],
+            duration_seconds=30,
+            should_stop=lambda: True,
+            metric_start_hook=lambda _name: (lambda: True),
+        )
+    )
+
+    assert result["realtime_results"]["health-check"]["packets"] == 0
+    assert captured["hard_timeout"] == 40.0
+    assert captured["stop_on_idle"] is True
+    assert captured["should_stop"] is None
+
+
+def test_realtime_h59_spo2_runs_as_one_shot(monkeypatch, tmp_path):
+    import h59_client.sync as sync_module
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.disconnected = False
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    class FakeTransport:
+        def __init__(self, _client, packet_callback=None) -> None:
+            self.packet_callback = packet_callback
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def fake_resolve_single_target(**_kwargs):
+        return DeviceTarget(address="00000000-0000-0000-0000-000000000001", name="Demo Band", nickname="demo")
+
+    async def fake_connect_target(_target, *, timeout=20.0):
+        assert timeout == 20.0
+        return FakeClient()
+
+    async def fake_read_device_versions(_client):
+        return ("HW", "FW")
+
+    captured: dict[str, object] = {}
+
+    async def fake_query_realtime_controlled(_transport, metric_name, **kwargs):
+        captured["metric_name"] = metric_name
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(sync_module, "resolve_single_target", fake_resolve_single_target)
+    monkeypatch.setattr(sync_module, "connect_target", fake_connect_target)
+    monkeypatch.setattr(sync_module, "PacketTransport", FakeTransport)
+    monkeypatch.setattr(sync_module, "read_device_versions", fake_read_device_versions)
+    monkeypatch.setattr(sync_module, "_query_realtime_controlled", fake_query_realtime_controlled)
+
+    result = asyncio.run(
+        realtime_h59(
+            db_path=tmp_path / "persist.sqlite",
+            selector="demo-band",
+            metric_names=["spo2"],
+            duration_seconds=30,
+            should_stop=lambda: True,
+            metric_start_hook=lambda _name: (lambda: True),
+        )
+    )
+
+    assert result["realtime_results"]["spo2"]["samples"] == 0
+    assert captured["metric_name"] == "spo2"
+    assert captured["hard_timeout"] == 40.0
+    assert captured["stop_on_idle"] is True
+    assert captured["should_stop"] is None
