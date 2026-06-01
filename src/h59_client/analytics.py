@@ -23,6 +23,7 @@ DROP VIEW IF EXISTS analytic_hrv_intervals;
 DROP VIEW IF EXISTS analytic_realtime_observations;
 DROP VIEW IF EXISTS analytic_daily_steps;
 DROP VIEW IF EXISTS analytic_daily_sleep;
+DROP VIEW IF EXISTS analytic_sleep_sessions_classified;
 DROP VIEW IF EXISTS analytic_sleep_sessions_canonical;
 
 CREATE VIEW IF NOT EXISTS analytic_heart_rate_intervals AS
@@ -81,7 +82,7 @@ SELECT
     sss.raw_json
 FROM sleep_stage_samples AS sss;
 
-CREATE VIEW IF NOT EXISTS analytic_sleep_sessions_canonical AS
+CREATE VIEW IF NOT EXISTS analytic_sleep_sessions_classified AS
 WITH sleep_quality AS (
     SELECT
         ss.sleep_session_id,
@@ -96,24 +97,15 @@ WITH sleep_quality AS (
         ss.source_command,
         ss.raw_json,
         date(COALESCE(ss.end_timestamp, ss.start_timestamp)) AS sleep_day,
-        COALESCE(SUM(CASE WHEN sss.stage = 'no-data' THEN sss.minutes ELSE 0 END), 0) AS no_data_minutes
+        COALESCE(SUM(CASE WHEN sss.stage = 'no-data' THEN sss.minutes ELSE 0 END), 0) AS no_data_minutes,
+        CASE
+            WHEN ss.total_minutes IS NOT NULL THEN MAX(ss.total_minutes - COALESCE(SUM(CASE WHEN sss.stage = 'no-data' THEN sss.minutes ELSE 0 END), 0), 0)
+            ELSE NULL
+        END AS effective_minutes
     FROM sleep_sessions AS ss
     LEFT JOIN sleep_stage_samples AS sss
       ON sss.sleep_session_id = ss.sleep_session_id
     GROUP BY ss.sleep_session_id
-),
-ranked AS (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY device_id, sleep_day
-            ORDER BY
-                no_data_minutes ASC,
-                end_timestamp DESC,
-                total_minutes DESC,
-                sleep_session_id DESC
-        ) AS session_rank
-    FROM sleep_quality
 )
 SELECT
     sleep_session_id,
@@ -128,7 +120,52 @@ SELECT
     source_command,
     raw_json,
     sleep_day,
-    no_data_minutes
+    no_data_minutes,
+    effective_minutes,
+    CASE
+        WHEN total_minutes >= 180
+             AND (
+                date(COALESCE(start_timestamp, end_timestamp)) <> date(COALESCE(end_timestamp, start_timestamp))
+                OR CAST(strftime('%H', COALESCE(start_timestamp, end_timestamp)) AS INTEGER) >= 18
+                OR CAST(strftime('%H', COALESCE(end_timestamp, start_timestamp)) AS INTEGER) <= 12
+             )
+        THEN 'overnight'
+        ELSE 'nap'
+    END AS session_kind
+FROM sleep_quality;
+
+CREATE VIEW IF NOT EXISTS analytic_sleep_sessions_canonical AS
+WITH ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY device_id, sleep_day
+            ORDER BY
+                effective_minutes DESC,
+                no_data_minutes ASC,
+                end_timestamp DESC,
+                total_minutes DESC,
+                sleep_session_id DESC
+        ) AS session_rank
+    FROM analytic_sleep_sessions_classified
+    WHERE session_kind = 'overnight'
+)
+SELECT
+    sleep_session_id,
+    device_id,
+    sync_id,
+    start_timestamp,
+    end_timestamp,
+    total_minutes,
+    state,
+    score,
+    is_provisional,
+    source_command,
+    raw_json,
+    sleep_day,
+    no_data_minutes,
+    effective_minutes,
+    session_kind
 FROM ranked
 WHERE session_rank = 1;
 

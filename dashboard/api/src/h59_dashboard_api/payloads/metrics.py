@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from ..db import utc_now
 from ..schemas import MetricPoint, MetricSeriesResponse
 from ..time import range_start
 from .common import quantile, summary, time_context
@@ -10,16 +11,17 @@ from .common import quantile, summary, time_context
 
 def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str, range_name: str) -> MetricSeriesResponse:
     start_iso = range_start(range_name).isoformat()
+    end_iso = utc_now().isoformat()
 
     if metric == "heart-rate" and range_name == "7d":
         rows = conn.execute(
             """
             SELECT date(valid_from) AS day_value, value
             FROM analytic_heart_rate_intervals
-            WHERE device_id=? AND valid_from>=?
+            WHERE device_id=? AND valid_from>=? AND valid_from<=?
             ORDER BY valid_from ASC
             """,
-            (device_id, start_iso),
+            (device_id, start_iso, end_iso),
         ).fetchall()
         buckets: dict[str, list[int]] = {}
         for row in rows:
@@ -56,10 +58,10 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
             """
             SELECT valid_from, systolic, diastolic
             FROM analytic_blood_pressure_intervals
-            WHERE device_id=? AND valid_from>=?
+            WHERE device_id=? AND valid_from>=? AND valid_from<=?
             ORDER BY valid_from ASC
             """,
-            (device_id, start_iso),
+            (device_id, start_iso, end_iso),
         ).fetchall()
         points = [
             MetricPoint(
@@ -139,10 +141,10 @@ def metric_series_payload(conn: sqlite3.Connection, device_id: int, metric: str,
         f"""
         SELECT *
         FROM {config['table']}
-        WHERE device_id=? AND valid_from>=?
+        WHERE device_id=? AND valid_from>=? AND valid_from<=?
         ORDER BY valid_from ASC
         """,
-        (device_id, start_iso),
+        (device_id, start_iso, end_iso),
     ).fetchall()
     points = [config["point_builder"](row) for row in rows]
     values = [point.value for point in points if point.value is not None]

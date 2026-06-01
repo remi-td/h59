@@ -1,10 +1,14 @@
+import asyncio
 from datetime import UTC, datetime
 
+from h59_client.devices import DeviceTarget
+from h59_client.protocol import RealTimeSample
 from h59_client.sync import (
     INITIAL_BACKFILL_MAX_DAYS,
     determine_initial_backfill_dates,
     determine_history_selector,
     determine_sync_dates,
+    realtime_h59,
 )
 
 
@@ -51,3 +55,87 @@ def test_determine_history_selector_uses_utc_day_offset():
     assert determine_history_selector(now=now, target=datetime(2026, 5, 27, 0, 0, tzinfo=UTC)) == 0
     assert determine_history_selector(now=now, target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC)) == 1
     assert determine_history_selector(now=now, target=datetime(2026, 5, 24, 0, 0, tzinfo=UTC)) == 3
+
+
+def test_realtime_h59_stdout_mode_skips_database_persistence(monkeypatch, tmp_path):
+    import h59_client.sync as sync_module
+
+    class FailDatabase:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("stdout mode should not open the database writer")
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.disconnected = False
+
+        async def disconnect(self) -> None:
+            self.disconnected = True
+
+    class FakeTransport:
+        def __init__(self, _client, packet_callback=None) -> None:
+            self.packet_callback = packet_callback
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def fake_resolve_single_target(**_kwargs):
+        return DeviceTarget(address="00000000-0000-0000-0000-000000000001", name="Demo Band", nickname="demo")
+
+    async def fake_connect_target(_target, *, timeout=20.0):
+        assert timeout == 20.0
+        return FakeClient()
+
+    async def fail_read_device_versions(_client):
+        raise AssertionError("stdout mode should not request versions for persistence")
+
+    async def fake_query_realtime_controlled(_transport, metric_name, *, on_sample=None, **_kwargs):
+        sample = RealTimeSample(metric="heart_rate", value=77, error_code=0)
+        observed_at = "2026-05-31T10:00:00+00:00"
+        if on_sample is not None:
+            on_sample(
+                metric_name,
+                {
+                    "timestamp": observed_at,
+                    "value": 77,
+                    "error_code": 0,
+                    "raw_packet_hex": "6901004d000000000000000000000000",
+                },
+            )
+        return [(sample, "6901004d000000000000000000000000", observed_at)]
+
+    monkeypatch.setattr(sync_module, "H59Database", FailDatabase)
+    monkeypatch.setattr(sync_module, "resolve_single_target", fake_resolve_single_target)
+    monkeypatch.setattr(sync_module, "connect_target", fake_connect_target)
+    monkeypatch.setattr(sync_module, "PacketTransport", FakeTransport)
+    monkeypatch.setattr(sync_module, "read_device_versions", fail_read_device_versions)
+    monkeypatch.setattr(sync_module, "_query_realtime_controlled", fake_query_realtime_controlled)
+
+    observed_samples: list[tuple[str, dict[str, object]]] = []
+    result = asyncio.run(
+        realtime_h59(
+            db_path=tmp_path / "stdout.sqlite",
+            selector="00000000-0000-0000-0000-000000000001",
+            metric_names=["heart-rate"],
+            persist=False,
+            on_sample=lambda metric_name, sample: observed_samples.append((metric_name, sample)),
+        )
+    )
+
+    assert result["persisted"] is False
+    assert result["sync_id"] is None
+    assert result["address"] == "00000000-0000-0000-0000-000000000001"
+    assert result["realtime_results"]["heart-rate"]["samples"] == 1
+    assert observed_samples == [
+        (
+            "heart-rate",
+            {
+                "timestamp": "2026-05-31T10:00:00+00:00",
+                "value": 77,
+                "error_code": 0,
+                "raw_packet_hex": "6901004d000000000000000000000000",
+            },
+        )
+    ]

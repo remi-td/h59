@@ -1,22 +1,12 @@
-import { useMemo } from "react";
 import { useOxygenData } from "../api/hooks";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
-import { maxTimestamp } from "../lib/series";
 
 export function Oxygen({ device }: { device: string }) {
   const { data, error, loading } = useOxygenData(device);
   const spo2 = data?.spo2 ?? null;
   const stress = data?.stress ?? null;
   const sleep = data?.sleep ?? null;
-
-  const rangeEnd = useMemo(
-    () =>
-      maxTimestamp([
-        ...(spo2?.points || []).map((point) => point.timestamp),
-        ...(stress?.points || []).map((point) => point.timestamp),
-      ]),
-    [spo2, stress],
-  );
+  const rangeEnd = new Date().toISOString();
 
   if (error) {
     return <div className="panel-error">{error}</div>;

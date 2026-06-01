@@ -126,6 +126,8 @@ Command:
 Assessment:
 - proven available
 - semantics still need dashboard-level interpretation
+- selector `0` is a partial current-day buffer, not a guaranteed full current day
+- on 2026-05-31 the current-day buffer stopped advancing at `17:00 UTC` and the bracelet returned explicit zeroes for later slots
 
 ### HRV history
 
@@ -138,6 +140,9 @@ Command:
 Assessment:
 - proven available
 - sample decoding needs refinement to 16-bit values
+- selector `0` is also a partial current-day buffer
+- the current proven split layout only has room for about `25` 16-bit samples, which is about `12.5` hours at a `30` minute interval
+- that capacity ceiling matches the observed half-day-ish HRV coverage in the database
 
 ## Observed Retention
 
@@ -188,6 +193,25 @@ Proven on 2026-05-31:
   - multiple = `60`
 - this strongly suggests the bracelet exposes at least some writable scheduling/configuration surface for automatic measurement, worth exploring later as a separate device-configuration feature
 - by shape alone, `Settings ID 22` (heart rate) also looks interval-configurable, while `44`, `54`, and `56` currently look more like enable/disable toggles than interval settings
+- periodic measurement on/off control is now proven for:
+  - `12` blood pressure
+  - `44` SpO2
+  - `54` stress / pressure-like detection
+  - `56` HRV
+- read shape:
+  - request payload `[1]`
+  - reply byte `2` behaves as the enabled flag
+- live read examples:
+  - `0c0101000017003c0000000000000061` -> blood pressure enabled
+  - `2c01010000000000000000000000002e` -> SpO2 enabled
+  - `36010000000000000000000000000037` -> stress disabled
+  - `3801010000000000000000000000003a` -> HRV enabled
+- write shape:
+  - request payload `[2, 1]` enables the periodic measurement
+  - request payload `[2, 0]` disables it
+- live round-trip write was proven for `stress`:
+  - `h59 device set stress on ...`
+  - follow-up read confirmed `enabled = 1`
 - direct `cmd 20` probes still returned nothing, even when timestamps were encoded using local-wall-clock semantics
 - a clean retry of `cmd 13` with explicit settling and direct-address reconnect showed only explicit no-data (`0dff...`) for:
   - empty payload

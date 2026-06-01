@@ -639,6 +639,59 @@ def test_storage_updates_existing_sleep_session_by_bounds(tmp_path):
     db.close()
 
 
+def test_storage_updates_existing_sleep_session_by_raw_json_identity(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-31T10:00:00+00:00",
+    )
+    sync_id_1 = db.create_sync(device_id, started_at="2026-05-31T10:00:00+00:00", source="test")
+    sync_id_2 = db.create_sync(device_id, started_at="2026-06-01T10:00:00+00:00", source="test")
+
+    repeated_session = SleepSession(
+        days_ago=0,
+        bytes_used=6,
+        sleep_start_minutes=1389,
+        sleep_end_minutes=1401,
+        periods=[SleepPeriod(stage="light", minutes=12)],
+    )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id_1,
+        reference=datetime(2026, 5, 31, 12, 0, tzinfo=UTC),
+        sessions=[repeated_session],
+        raw_packet_hex="bc27-first",
+        source_command=39,
+    )
+    db.record_sleep_sessions(
+        device_id,
+        sync_id_2,
+        reference=datetime(2026, 6, 1, 12, 0, tzinfo=UTC),
+        sessions=[repeated_session],
+        raw_packet_hex="bc27-second",
+        source_command=39,
+    )
+
+    row = db.connection.execute(
+        """
+        SELECT sync_id, start_timestamp, end_timestamp, total_minutes
+        FROM sleep_sessions
+        """
+    ).fetchone()
+    assert db.connection.execute("SELECT COUNT(*) FROM sleep_sessions").fetchone()[0] == 1
+    assert db.connection.execute("SELECT COUNT(*) FROM sleep_stage_samples").fetchone()[0] == 1
+    assert int(row["sync_id"]) == sync_id_2
+    assert row["start_timestamp"] == "2026-06-01T23:09:00+00:00"
+    assert row["end_timestamp"] == "2026-06-01T23:21:00+00:00"
+    assert int(row["total_minutes"]) == 12
+
+    db.close()
+
+
 def test_storage_normalizes_unknown_sleep_stage_to_rem(tmp_path):
     db = H59Database(tmp_path / "h59.sqlite")
     device_id = db.upsert_device(
@@ -917,5 +970,80 @@ def test_storage_dedupes_overlapping_sleep_sessions_in_canonical_view(tmp_path):
     assert daily_row is not None
     assert int(daily_row["minutes_total"]) == 489
     assert int(daily_row["session_count"]) == 1
+
+    db.close()
+
+
+def test_storage_classifies_sleep_naps_and_excludes_them_from_canonical_view(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-30T08:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-30T08:00:00+00:00", source="test")
+    db.connection.execute(
+        """
+        INSERT INTO sleep_sessions(device_id, sync_id, start_timestamp, end_timestamp, total_minutes, state, score, is_provisional, source_command, raw_json)
+        VALUES (?, ?, ?, ?, ?, 'decoded', NULL, 1, 39, '{\"source\":\"overnight\"}')
+        """,
+        (device_id, sync_id, "2026-05-29T21:55:00+00:00", "2026-05-30T07:49:00+00:00", 594),
+    )
+    overnight_session_id = int(db.connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+    db.connection.execute(
+        """
+        INSERT INTO sleep_stage_samples(sleep_session_id, device_id, sync_id, sequence_index, stage, start_timestamp, end_timestamp, minutes, is_provisional, raw_json)
+        VALUES (?, ?, ?, 0, 'light', '2026-05-29T21:55:00+00:00', '2026-05-30T07:49:00+00:00', 594, 1, '{\"source\":\"overnight\"}')
+        """,
+        (overnight_session_id, device_id, sync_id),
+    )
+    db.connection.execute(
+        """
+        INSERT INTO sleep_sessions(device_id, sync_id, start_timestamp, end_timestamp, total_minutes, state, score, is_provisional, source_command, raw_json)
+        VALUES (?, ?, ?, ?, ?, 'decoded', NULL, 0, 39, '{\"source\":\"nap\"}')
+        """,
+        (device_id, sync_id, "2026-05-30T01:39:00+00:00", "2026-05-30T01:53:00+00:00", 14),
+    )
+    nap_session_id = int(db.connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+    db.connection.execute(
+        """
+        INSERT INTO sleep_stage_samples(sleep_session_id, device_id, sync_id, sequence_index, stage, start_timestamp, end_timestamp, minutes, is_provisional, raw_json)
+        VALUES (?, ?, ?, 0, 'light', '2026-05-30T01:39:00+00:00', '2026-05-30T01:53:00+00:00', 14, 0, '{\"source\":\"nap\"}')
+        """,
+        (nap_session_id, device_id, sync_id),
+    )
+    db.connection.commit()
+
+    classified_rows = db.connection.execute(
+        """
+        SELECT sleep_session_id, session_kind, effective_minutes
+        FROM analytic_sleep_sessions_classified
+        WHERE device_id=?
+        ORDER BY sleep_session_id ASC
+        """,
+        (device_id,),
+    ).fetchall()
+    canonical_row = db.connection.execute(
+        """
+        SELECT sleep_session_id, session_kind, total_minutes
+        FROM analytic_sleep_sessions_canonical
+        WHERE device_id=? AND sleep_day='2026-05-30'
+        """,
+        (device_id,),
+    ).fetchone()
+
+    assert [(int(row["sleep_session_id"]), row["session_kind"]) for row in classified_rows] == [
+        (overnight_session_id, "overnight"),
+        (nap_session_id, "nap"),
+    ]
+    assert int(classified_rows[0]["effective_minutes"]) == 594
+    assert int(classified_rows[1]["effective_minutes"]) == 14
+    assert canonical_row is not None
+    assert int(canonical_row["sleep_session_id"]) == overnight_session_id
+    assert canonical_row["session_kind"] == "overnight"
+    assert int(canonical_row["total_minutes"]) == 594
 
     db.close()

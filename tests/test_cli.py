@@ -53,6 +53,15 @@ def test_build_parser_supports_realtime_control_arguments():
     assert args.time == 30
 
 
+def test_build_parser_supports_realtime_stdout_mode():
+    parser = build_parser()
+    args = parser.parse_args(["realtime", "--stdout", "demo-band", "health-check"])
+    assert args.command == "realtime"
+    assert args.selector == "demo-band"
+    assert args.stdout is True
+    assert args.metrics == ["health-check"]
+
+
 def test_build_parser_supports_config_commands():
     parser = build_parser()
     show_args = parser.parse_args(["config", "show"])
@@ -124,6 +133,25 @@ def test_build_parser_supports_device_capabilities_command():
     args = parser.parse_args(["device", "capabilities", "bracelet"])
     assert args.command == "device"
     assert args.device_command == "capabilities"
+    assert args.selector == "bracelet"
+
+
+def test_build_parser_supports_device_get_setting_command():
+    parser = build_parser()
+    args = parser.parse_args(["device", "get", "stress", "bracelet"])
+    assert args.command == "device"
+    assert args.device_command == "get"
+    assert args.metric == "stress"
+    assert args.selector == "bracelet"
+
+
+def test_build_parser_supports_device_set_setting_command():
+    parser = build_parser()
+    args = parser.parse_args(["device", "set", "hrv", "on", "bracelet"])
+    assert args.command == "device"
+    assert args.device_command == "set"
+    assert args.metric == "hrv"
+    assert args.state == "on"
     assert args.selector == "bracelet"
 
 

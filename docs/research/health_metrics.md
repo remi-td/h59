@@ -79,6 +79,15 @@ Assessment:
 - historical pressure/stress-like data is available
 - the current sync bug is that it always sends selector `0`, so it only captures today
 - the first request byte should be treated as a day/history selector, not a fixed constant
+- the same-day `selector 0` payload can stall before day-end while still returning explicit zeroes for later slots
+- on 2026-05-31 the bracelet returned non-zero values only through `17:00 UTC`, then zeroes for the rest of the current-day pressure/stress buffer
+- repeated syncs later that evening returned the same stable bytes, so the bracelet had stopped advancing that current-day buffer even though heart-rate and step history continued
+- a live settings read on 2026-05-31 showed that stress detection had in fact been turned off on the bracelet:
+  - `36010000000000000000000000000037`
+  - interpreted as `command=54`, `action=1` (read), `enabled=0`
+- a live round-trip write through the CLI proved this setting can be changed:
+  - `h59 device set stress on ...`
+  - follow-up read confirmed `enabled = 1`
 
 ### HRV History
 
@@ -97,6 +106,14 @@ Assessment:
 - the decoder still needs refinement
 - the current sync bug is that it always sends selector `0`, so it only captures today
 - the first request byte should be treated as a day/history selector, not a fixed constant
+- same-day `selector 0` is also a partial series
+- on 2026-05-31 the bracelet returned non-zero HRV values only through `08:30 UTC`, then zeroes
+- the current proven `0x39` split layout can hold only about `25` 16-bit samples total, which is only about `12.5` hours at a `30` minute interval
+- that capacity ceiling matches the observed data: current and historical HRV days top out around `18..24` half-hour points, never a full `48`
+- this strongly suggests that a full same-day HRV view would require either another selector semantics or a different endpoint than the currently proven `0x39` path
+- a live settings read on 2026-05-31 showed HRV detection enabled at that moment:
+  - `3801010000000000000000000000003a`
+  - interpreted as `command=56`, `action=1` (read), `enabled=1`
 
 ### Blood Pressure
 

@@ -27,9 +27,13 @@ DEVICE_FW_UUID = "00002a26-0000-1000-8000-00805f9b34fb"
 
 CMD_SET_TIME = 1
 CMD_BATTERY = 3
+CMD_BLOOD_PRESSURE_SETTINGS = 12
 CMD_REBOOT = 8
 CMD_BLINK_TWICE = 16
 CMD_READ_HEART_RATE = 21
+CMD_BLOOD_OXYGEN_SETTINGS = 44
+CMD_PRESSURE_SETTINGS = 54
+CMD_HRV_SETTINGS = 56
 CMD_HEART_RATE_LOG_SETTINGS = 22
 CMD_PRESSURE_HISTORY = 55
 CMD_HRV_HISTORY = 57
@@ -103,6 +107,47 @@ def heart_rate_log_settings_packet(enabled: bool, interval: int) -> bytearray:
         raise ValueError("interval must be between 1 and 255")
     state = 1 if enabled else 2
     return make_packet(CMD_HEART_RATE_LOG_SETTINGS, bytearray([2, state, interval]))
+
+
+PERIODIC_MEASUREMENT_SETTINGS = {
+    "blood-pressure": CMD_BLOOD_PRESSURE_SETTINGS,
+    "spo2": CMD_BLOOD_OXYGEN_SETTINGS,
+    "stress": CMD_PRESSURE_SETTINGS,
+    "hrv": CMD_HRV_SETTINGS,
+}
+
+
+@dataclass
+class PeriodicMeasurementSetting:
+    metric: str
+    enabled: bool
+    command_id: int
+    action: int
+    payload_hex: str
+
+
+def periodic_measurement_settings_read_packet(command_id: int) -> bytearray:
+    return make_packet(command_id, bytearray([1]))
+
+
+def periodic_measurement_settings_write_packet(command_id: int, enabled: bool) -> bytearray:
+    return make_packet(command_id, bytearray([2, 1 if enabled else 0]))
+
+
+def parse_periodic_measurement_setting(packet: bytearray) -> PeriodicMeasurementSetting:
+    if len(packet) != 16:
+        raise ValueError("invalid periodic setting packet")
+    command_id = packet[0] & 127
+    metric = next((name for name, value in PERIODIC_MEASUREMENT_SETTINGS.items() if value == command_id), None)
+    if metric is None:
+        raise ValueError(f"unsupported periodic setting command: {command_id}")
+    return PeriodicMeasurementSetting(
+        metric=metric,
+        enabled=packet[2] == 1,
+        command_id=command_id,
+        action=packet[1],
+        payload_hex=packet.hex(),
+    )
 
 
 @dataclass

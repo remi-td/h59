@@ -6,6 +6,8 @@ from h59_client.protocol import (
     ActivityBlockParser,
     HrvHistoryParser,
     HeartRateDayParser,
+    PERIODIC_MEASUREMENT_SETTINGS,
+    PeriodicMeasurementSetting,
     PressureHistoryParser,
     parse_bigdata_blood_oxygen,
     parse_bigdata_sleep,
@@ -13,7 +15,10 @@ from h59_client.protocol import (
     parse_capabilities,
     parse_health_check_packet,
     parse_heart_rate_log_settings,
+    parse_periodic_measurement_setting,
     parse_realtime_packet,
+    periodic_measurement_settings_read_packet,
+    periodic_measurement_settings_write_packet,
     read_hrv_history_packet,
     read_pressure_history_packet,
     set_time_packet,
@@ -133,6 +138,23 @@ def test_parse_health_check_packet_without_final_result():
     assert parsed.heart_rate is None
     assert parsed.cuff_pressure_tenths == 930
     assert parsed.has_blood_pressure_result is False
+
+
+def test_periodic_measurement_setting_packets_use_expected_actions():
+    assert periodic_measurement_settings_read_packet(PERIODIC_MEASUREMENT_SETTINGS["stress"]).hex() == "36010000000000000000000000000037"
+    assert periodic_measurement_settings_write_packet(PERIODIC_MEASUREMENT_SETTINGS["stress"], True).hex() == "36020100000000000000000000000039"
+    assert periodic_measurement_settings_write_packet(PERIODIC_MEASUREMENT_SETTINGS["stress"], False).hex() == "36020000000000000000000000000038"
+
+
+def test_parse_periodic_measurement_setting():
+    parsed = parse_periodic_measurement_setting(bytearray.fromhex("3801010000000000000000000000003a"))
+    assert parsed == PeriodicMeasurementSetting(
+        metric="hrv",
+        enabled=True,
+        command_id=56,
+        action=1,
+        payload_hex="3801010000000000000000000000003a",
+    )
 
 
 def test_set_time_packet_preserves_provided_wall_time(monkeypatch):

@@ -1,22 +1,12 @@
-import { useMemo } from "react";
 import { useHeartData } from "../api/hooks";
 import { TimeSeriesChart } from "../components/TimeSeriesChart";
-import { maxTimestamp } from "../lib/series";
 
 export function Heart({ device }: { device: string }) {
   const { data, error, loading } = useHeartData(device);
   const heart = data?.heart ?? null;
   const hrv = data?.hrv ?? null;
   const sleep = data?.sleep ?? null;
-
-  const rangeEnd = useMemo(
-    () =>
-      maxTimestamp([
-        ...(heart?.points || []).map((point) => point.timestamp),
-        ...(hrv?.points || []).map((point) => point.timestamp),
-      ]),
-    [heart, hrv],
-  );
+  const rangeEnd = new Date().toISOString();
 
   if (error) {
     return <div className="panel-error">{error}</div>;

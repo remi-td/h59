@@ -75,6 +75,15 @@ h59 device info 1
 h59 vibrate 1 
 ```
 
+You can also read and change periodic measurement settings directly on the bracelet:
+```bash
+h59 device get stress wristband
+h59 device set stress on wristband
+h59 device set hrv off wristband
+h59 device set spo2 on wristband
+h59 device set blood-pressure on wristband
+```
+
 ## Default Database Location
 
 - from the source checkout: `./data/h59.sqlite`
@@ -105,6 +114,8 @@ Main commands:
 - `h59 device nickname set <selector> <nickname>`
 - `h59 device info [device_id|nickname|address]`
 - `h59 device capabilities [device_id|nickname|address]`
+- `h59 device get <blood-pressure|spo2|stress|hrv> [device_id|nickname|address]`
+- `h59 device set <blood-pressure|spo2|stress|hrv> <on|off> [device_id|nickname|address]`
 - `h59 device vibrate [device_id|nickname|address]`
 - `h59 device reboot [device_id|nickname|address]`
 - `h59 vibrate [device_id|nickname|address]`
@@ -134,6 +145,8 @@ Realtime mode:
 - `health-check` is currently the only proven path for capturing a finished blood-pressure reading on this H59
 - realtime observations are stored in `realtime_samples` and classified through `metric_codes`
 - analytics may denormalize selected realtime observations, such as health-check systolic/diastolic pairs, into consumer-facing metric views
+- `--stdout` switches realtime into terminal-only mode: live samples are printed as they arrive and nothing is written to SQLite
+- in `--stdout` mode there is no new `sync_id`, no `realtime_samples` insert, and no raw-packet persistence
 - by default, `health-check` auto-stops using the current packet/idle heuristic
 - `h59 realtime <selector>` with no metric runs all known realtime metrics sequentially
 - the default no-metric behavior is therefore: try every known realtime metric, one after another
@@ -154,13 +167,18 @@ h59 realtime left-wrist health-check --time 30s
 h59 realtime left-wrist
 ```
 
+```bash
+h59 realtime --stdout left-wrist health-check
+```
+
 This:
 - connects to the bracelet
 - starts the requested live measurement workflow
 - if no metric is specified, iterates through all known realtime metrics sequentially
 - keeps the workflow active according to the selected stop mode
-- stores the resulting live observations in `realtime_samples`
-- lets analytics derive a paired systolic/diastolic blood-pressure reading from those live observations
+- by default, stores the resulting live observations in `realtime_samples`
+- with `--stdout`, prints live samples to the terminal instead and leaves the SQLite database untouched
+- lets analytics derive a paired systolic/diastolic blood-pressure reading from persisted live observations
 
 Clock mode:
 - by default, `h59-local` writes `UTC` to the bracelet and stores all backend timestamps in UTC

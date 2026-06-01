@@ -138,6 +138,44 @@ def test_dashboard_api_metric_and_quality(tmp_path: Path, monkeypatch) -> None:
     assert quality.json()["sample_counts_today"]["heart_rate"] >= 1
 
 
+def test_dashboard_api_metric_filters_future_points(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        device_id = int(db.connection.execute("SELECT device_id FROM devices LIMIT 1").fetchone()[0])
+        sync_id = int(db.connection.execute("SELECT MIN(sync_id) FROM syncs").fetchone()[0])
+        db.connection.execute("DELETE FROM blood_oxygen_samples")
+        db.connection.executemany(
+            "INSERT INTO blood_oxygen_samples(device_id, sync_id, timestamp, sample_index, min_percent, max_percent, interval_minutes, is_provisional, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, ?, ?, 30, 0, 42, '')",
+            [
+                (device_id, sync_id, "2026-05-29T11:30:00+00:00", 0, 95, 97),
+                (device_id, sync_id, "2026-05-29T12:30:00+00:00", 1, 96, 98),
+            ],
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(metrics_payload_module, "range_start", lambda _range_name: datetime(2026, 5, 28, 12, 0, tzinfo=UTC))
+    monkeypatch.setattr(metrics_payload_module, "utc_now", lambda: datetime(2026, 5, 29, 12, 0, tzinfo=UTC))
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=False,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    metric = client.get("/api/metrics/spo2?range=24h")
+    assert metric.status_code == 200
+    payload = metric.json()
+    assert [point["timestamp"] for point in payload["points"]] == ["2026-05-29T11:30:00+00:00"]
+
+
 def test_dashboard_api_today_does_not_fall_back_to_prior_activity_day(tmp_path: Path) -> None:
     db_path = tmp_path / "h59.sqlite"
     _seed_db(db_path)

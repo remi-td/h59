@@ -12,9 +12,13 @@ from h59_client.protocol import (
     BLINK_TWICE_PACKET,
     REBOOT_PACKET,
     CMD_BATTERY,
+    PERIODIC_MEASUREMENT_SETTINGS,
     CMD_SET_TIME,
     parse_battery,
     parse_capabilities,
+    parse_periodic_measurement_setting,
+    periodic_measurement_settings_read_packet,
+    periodic_measurement_settings_write_packet,
     set_time_packet,
 )
 
@@ -147,4 +151,77 @@ async def fetch_device_info_h59(
         "advertisement": target.advertisement,
         "battery_level": battery.battery_level,
         "charging": battery.charging,
+    }
+
+
+async def fetch_periodic_measurement_setting_h59(
+    *,
+    db_path: str,
+    selector: str | None = None,
+    setting_name: str,
+    name: str = "H59",
+    scan_timeout: float = 20.0,
+) -> dict[str, object]:
+    if setting_name not in PERIODIC_MEASUREMENT_SETTINGS:
+        raise ValueError(f"unsupported periodic setting: {setting_name}")
+
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
+    try:
+        transport = PacketTransport(client)
+        await transport.start()
+        try:
+            command_id = PERIODIC_MEASUREMENT_SETTINGS[setting_name]
+            await transport.send_packet(periodic_measurement_settings_read_packet(command_id))
+            packet, _observed_at = (await transport.read_command_packets(command_id))[0]
+            setting = parse_periodic_measurement_setting(packet)
+        finally:
+            await transport.stop()
+    finally:
+        await client.disconnect()
+
+    return {
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
+        "setting": setting,
+    }
+
+
+async def set_periodic_measurement_setting_h59(
+    *,
+    db_path: str,
+    selector: str | None = None,
+    setting_name: str,
+    enabled: bool,
+    name: str = "H59",
+    scan_timeout: float = 20.0,
+) -> dict[str, object]:
+    if setting_name not in PERIODIC_MEASUREMENT_SETTINGS:
+        raise ValueError(f"unsupported periodic setting: {setting_name}")
+
+    target = await resolve_single_target(db_path=db_path, selector=selector, name=name, scan_timeout=scan_timeout)
+    client = await connect_target(target)
+    try:
+        transport = PacketTransport(client)
+        await transport.start()
+        try:
+            command_id = PERIODIC_MEASUREMENT_SETTINGS[setting_name]
+            await transport.send_packet(periodic_measurement_settings_write_packet(command_id, enabled))
+            written_packet, _observed_at = (await transport.read_command_packets(command_id))[0]
+            written = parse_periodic_measurement_setting(written_packet)
+            await transport.send_packet(periodic_measurement_settings_read_packet(command_id))
+            confirmed_packet, _observed_at = (await transport.read_command_packets(command_id))[0]
+            confirmed = parse_periodic_measurement_setting(confirmed_packet)
+        finally:
+            await transport.stop()
+    finally:
+        await client.disconnect()
+
+    return {
+        "address": target.address,
+        "name": target.name,
+        "nickname": target.nickname,
+        "written": written,
+        "confirmed": confirmed,
     }

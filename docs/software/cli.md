@@ -185,10 +185,17 @@ Usage:
 h59 realtime <selector> [metric...]
 ```
 
+Terminal-only example:
+
+```bash
+h59 realtime --stdout left-wrist health-check
+```
+
 Arguments:
 - `<selector>`: device selector, required
 - `[metric...]`: optional realtime metrics; if omitted, all known metrics run sequentially
 - `-t, --time <duration>`: keep each requested metric active for a fixed duration; without it, the command is interactive and waits for Enter to stop the current metric
+- `--stdout`: print live samples to the terminal and skip all SQLite persistence for the realtime run
 
 Notes:
 - `realtime` is an active live-measurement mode
@@ -196,8 +203,9 @@ Notes:
 - the CLI does not run realtime metrics in parallel; it runs them sequentially over one BLE session
 - realtime packets are timestamped on receipt because the current live packet formats do not expose a trustworthy measurement timestamp
 - `health-check` runs the active one-key health check workflow
-- realtime observations are stored in `realtime_samples` and classified through `metric_codes`
-- analytics can derive paired systolic/diastolic blood-pressure readings from those realtime observations
+- by default, realtime observations are stored in `realtime_samples` and classified through `metric_codes`
+- analytics can derive paired systolic/diastolic blood-pressure readings from those persisted realtime observations
+- `--stdout` disables those writes entirely: no `sync_id`, no `realtime_samples`, and no raw-packet inserts
 - if multiple metrics are requested, they run sequentially and the CLI prompts once per metric in interactive mode
 - if no metric is specified, the CLI tries every known realtime metric sequentially
 
@@ -205,7 +213,7 @@ Operational flow:
 1. start the requested live metric on the bracelet
 2. collect emitted packets while the command runs
 3. decode supported values
-4. persist the results
+4. either persist the results or print them live with `--stdout`
 5. send the corresponding stop command
 
 Clock mode policy:
@@ -238,6 +246,8 @@ Subcommands:
 - `nickname set`
 - `info`
 - `capabilities`
+- `get`
+- `set`
 - `vibrate`
 - `reboot`
 
@@ -249,12 +259,17 @@ h59 device list
 h59 device nickname set 1 left-wrist
 h59 device info left-wrist
 h59 device capabilities left-wrist
+h59 device get stress left-wrist
+h59 device set stress on left-wrist
 h59 device vibrate left-wrist
 h59 device reboot left-wrist
 ```
 
 Note:
 - `h59 device capabilities` performs the protocol set-time exchange using the configured bracelet clock mode
+- `h59 device get <metric>` reads a periodic measurement setting from the bracelet
+- `h59 device set <metric> <on|off>` writes it and then reads it back to confirm
+- supported periodic settings are `blood-pressure`, `spo2`, `stress`, and `hrv`
 
 ## `config`
 

@@ -24,6 +24,7 @@ REQUIRED_ANALYTIC_VIEWS = {
     "analytic_heart_rate_intervals",
     "analytic_activity_intervals",
     "analytic_sleep_stage_intervals",
+    "analytic_sleep_sessions_classified",
     "analytic_sleep_sessions_canonical",
     "analytic_blood_oxygen_intervals",
     "analytic_blood_pressure_intervals",

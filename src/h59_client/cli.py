@@ -31,7 +31,14 @@ except ImportError:  # pragma: no cover - older bleak versions do not expose thi
     BleakDeviceNotFoundError = None  # type: ignore[assignment]
 
 from h59_client import __version__
-from h59_client.actions import fetch_capabilities_h59, fetch_device_info_h59, reboot_h59, vibrate_h59
+from h59_client.actions import (
+    fetch_capabilities_h59,
+    fetch_device_info_h59,
+    fetch_periodic_measurement_setting_h59,
+    reboot_h59,
+    set_periodic_measurement_setting_h59,
+    vibrate_h59,
+)
 from h59_client.config import (
     DEFAULT_DEVICE_CLOCK_MODE,
     DEVICE_CLOCK_MODES,
@@ -59,6 +66,7 @@ REALTIME_METRIC_CHOICES = (
     "blood-sugar",
     "hrv",
 )
+PERIODIC_SETTING_CHOICES = ("blood-pressure", "spo2", "stress", "hrv")
 
 
 def format_operational_error(exc: Exception) -> str | None:
@@ -374,12 +382,15 @@ def print_sync_results(results: list[dict[str, Any]]) -> None:
 def print_realtime_results(results: list[dict[str, Any]]) -> None:
     for result in results:
         label = result.get("nickname") or result.get("name") or result["address"]
-        print(
-            "Captured realtime measurements for {label} ({address}) into {db_path} (sync_id={sync_id})".format(
-                label=label,
-                **result,
+        if result.get("persisted", True):
+            print(
+                "Captured realtime measurements for {label} ({address}) into {db_path} (sync_id={sync_id})".format(
+                    label=label,
+                    **result,
+                )
             )
-        )
+        else:
+            print(f"Captured realtime measurements for {label} ({result['address']}) to terminal output only")
         realtime_results = result.get("realtime_results") or {}
         for metric_name, realtime_result in realtime_results.items():
             final_result = realtime_result.get("final_result")
@@ -403,6 +414,27 @@ def print_realtime_results(results: list[dict[str, Any]]) -> None:
                 )
             else:
                 print(f"  {metric_name}: {realtime_result.get('packets', 0)} packets")
+
+
+def print_realtime_sample(metric_name: str, sample: dict[str, Any]) -> None:
+    timestamp = sample.get("timestamp", "n/a")
+    if metric_name == "health-check":
+        systolic = sample.get("systolic")
+        diastolic = sample.get("diastolic")
+        heart_rate = sample.get("heart_rate")
+        if systolic is not None and diastolic is not None:
+            hr_suffix = f", HR {heart_rate} bpm" if heart_rate is not None else ""
+            print(f"{timestamp} health-check {systolic}/{diastolic} mmHg{hr_suffix}")
+            return
+        cuff_pressure_tenths = sample.get("cuff_pressure_tenths")
+        if cuff_pressure_tenths is not None:
+            print(f"{timestamp} health-check cuff={cuff_pressure_tenths}")
+            return
+    value = sample.get("value")
+    if value is not None:
+        print(f"{timestamp} {metric_name} {value}")
+        return
+    print(f"{timestamp} {metric_name} {sample}")
 
 
 def _wait_for_enter_to_stop(stop_event: threading.Event) -> None:
@@ -623,6 +655,7 @@ def handle_realtime(args: argparse.Namespace) -> int:
         stop_callback = None
         print(f"Realtime measurement running for {args.time} seconds per metric.")
 
+    sample_callback = print_realtime_sample if args.stdout else None
     result = asyncio.run(
         realtime_h59(
             db_path=args.db,
@@ -633,6 +666,8 @@ def handle_realtime(args: argparse.Namespace) -> int:
             duration_seconds=args.time,
             should_stop=stop_callback,
             metric_start_hook=metric_start_hook,
+            persist=not args.stdout,
+            on_sample=sample_callback,
         )
     )
     print_realtime_results([result])
@@ -749,6 +784,54 @@ def handle_device_discover(args: argparse.Namespace) -> int:
         for target in targets
     ]
     print(json.dumps(serialized, indent=2, sort_keys=True))
+    return 0
+
+
+def handle_device_setting_get(args: argparse.Namespace) -> int:
+    result = asyncio.run(
+        fetch_periodic_measurement_setting_h59(
+            db_path=args.db,
+            selector=args.selector,
+            setting_name=args.metric,
+            name=DEFAULT_DISCOVERY_NAME,
+            scan_timeout=args.scan_timeout,
+        )
+    )
+    setting = result["setting"]
+    label = result.get("nickname") or result.get("name") or result["address"]
+    print(
+        "{metric} is {state} on {label} ({address})".format(
+            metric=setting.metric,
+            state="on" if setting.enabled else "off",
+            label=label,
+            address=result["address"],
+        )
+    )
+    return 0
+
+
+def handle_device_setting_set(args: argparse.Namespace) -> int:
+    result = asyncio.run(
+        set_periodic_measurement_setting_h59(
+            db_path=args.db,
+            selector=args.selector,
+            setting_name=args.metric,
+            enabled=args.state == "on",
+            name=DEFAULT_DISCOVERY_NAME,
+            scan_timeout=args.scan_timeout,
+        )
+    )
+    confirmed = result["confirmed"]
+    label = result.get("nickname") or result.get("name") or result["address"]
+    print(
+        "Set {metric} {requested} on {label} ({address}); confirmed {confirmed_state}".format(
+            metric=confirmed.metric,
+            requested=args.state,
+            label=label,
+            address=result["address"],
+            confirmed_state="on" if confirmed.enabled else "off",
+        )
+    )
     return 0
 
 
@@ -1037,6 +1120,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_target_arguments(realtime_parser, selector_required=True)
     realtime_parser.add_argument("metrics", nargs="*", help="realtime metrics to run; defaults to all known metrics")
     realtime_parser.add_argument("-t", "--time", type=parse_duration, help="run each realtime metric for a fixed duration; defaults to interactive mode until Enter")
+    realtime_parser.add_argument("--stdout", action="store_true", help="print live samples to the terminal and do not persist them to SQLite")
     realtime_parser.set_defaults(handler=handle_realtime)
 
     vibrate_parser = subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
@@ -1085,6 +1169,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_target_arguments(device_capabilities)
     add_device_clock_arguments(device_capabilities)
     device_capabilities.set_defaults(handler=handle_device_capabilities)
+
+    device_get = device_subparsers.add_parser("get", help="read a periodic measurement setting from the device")
+    device_get.add_argument("metric", choices=PERIODIC_SETTING_CHOICES, help="measurement setting to read")
+    device_get.add_argument("selector", nargs="?", help="device selector: device_id, nickname, or address")
+    add_db_argument(device_get)
+    device_get.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    device_get.set_defaults(handler=handle_device_setting_get)
+
+    device_set = device_subparsers.add_parser("set", help="set a periodic measurement on or off on the device")
+    device_set.add_argument("metric", choices=PERIODIC_SETTING_CHOICES, help="measurement setting to update")
+    device_set.add_argument("state", choices=("on", "off"), help="desired setting state")
+    device_set.add_argument("selector", nargs="?", help="device selector: device_id, nickname, or address")
+    add_db_argument(device_set)
+    device_set.add_argument("--scan-timeout", type=float, default=20.0, help="BLE discovery timeout in seconds")
+    device_set.set_defaults(handler=handle_device_setting_set)
 
     device_vibrate = device_subparsers.add_parser("vibrate", help="trigger the bracelet attention/vibration signal")
     add_target_arguments(device_vibrate)

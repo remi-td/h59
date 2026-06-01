@@ -1575,12 +1575,23 @@ class H59Database:
                 """
                 SELECT sleep_session_id
                 FROM sleep_sessions
-                WHERE device_id=? AND source_command=? AND start_timestamp=? AND end_timestamp=?
+                WHERE device_id=? AND source_command=? AND raw_json=?
                 ORDER BY sleep_session_id DESC
                 LIMIT 1
                 """,
-                (device_id, source_command, start_timestamp, end_timestamp),
+                (device_id, source_command, raw_json),
             ).fetchone()
+            if existing_row is None:
+                existing_row = self.connection.execute(
+                    """
+                    SELECT sleep_session_id
+                    FROM sleep_sessions
+                    WHERE device_id=? AND source_command=? AND start_timestamp=? AND end_timestamp=?
+                    ORDER BY sleep_session_id DESC
+                    LIMIT 1
+                    """,
+                    (device_id, source_command, start_timestamp, end_timestamp),
+                ).fetchone()
             if existing_row is not None:
                 sleep_session_id = int(existing_row[0])
                 self.connection.execute(
@@ -1588,6 +1599,8 @@ class H59Database:
                     UPDATE sleep_sessions
                     SET
                         sync_id=?,
+                        start_timestamp=?,
+                        end_timestamp=?,
                         total_minutes=?,
                         state=?,
                         score=?,
@@ -1597,6 +1610,8 @@ class H59Database:
                     """,
                     (
                         sync_id,
+                        start_timestamp,
+                        end_timestamp,
                         total_minutes,
                         "decoded",
                         None,
@@ -1611,7 +1626,7 @@ class H59Database:
                 )
             else:
                 cur = self.connection.execute(
-                    """
+                """
                     INSERT INTO sleep_sessions(
                         device_id,
                         sync_id,
