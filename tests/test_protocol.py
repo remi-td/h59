@@ -6,6 +6,7 @@ from h59_client.protocol import (
     ActivityBlockParser,
     HrvHistory,
     HrvHistoryParser,
+    HeartRateDay,
     HeartRateDayParser,
     PERIODIC_MEASUREMENT_SETTINGS,
     PeriodicMeasurementSetting,
@@ -21,6 +22,7 @@ from h59_client.protocol import (
     parse_realtime_packet,
     periodic_measurement_settings_read_packet,
     periodic_measurement_settings_write_packet,
+    read_heart_rate_packet,
     read_hrv_history_packet,
     read_pressure_history_packet,
     set_time_packet,
@@ -118,6 +120,21 @@ def test_parse_heart_rate_day_sequence():
     assert result.heart_rates[10] == 60
 
 
+def test_heart_rate_day_readings_preserve_absolute_anchor():
+    day = HeartRateDay(
+        heart_rates=[67, 68],
+        timestamp=datetime(2026, 6, 1, 22, 0, tzinfo=UTC),
+        size=1,
+        index=2,
+        range=5,
+    )
+
+    rows = day.readings_with_times()
+
+    assert rows[0] == (67, datetime(2026, 6, 1, 22, 0, tzinfo=UTC))
+    assert rows[1] == (68, datetime(2026, 6, 1, 22, 5, tzinfo=UTC))
+
+
 def test_parse_realtime_packet():
     parsed = parse_realtime_packet(bytearray.fromhex("6903000000000000000000000000006c"))
     assert parsed.metric == "spo2"
@@ -173,6 +190,23 @@ def test_set_time_packet_preserves_provided_wall_time(monkeypatch):
         time.tzset()
 
     assert packet.hex() == "012605300540000100000000000000a2"
+
+
+def test_read_heart_rate_packet_preserves_local_midnight(monkeypatch):
+    previous_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "Europe/Paris")
+        time.tzset()
+        packet = read_heart_rate_packet(datetime(2026, 6, 2, 12, 0, tzinfo=UTC), clock_mode="local")
+    finally:
+        if previous_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous_tz)
+        time.tzset()
+
+    # 2026-06-02 00:00 local Paris is 2026-06-01 22:00 UTC.
+    assert packet.hex() == "15e0001e6a000000000000000000007d"
 
 
 def test_pressure_history_packet_uses_selector_byte():

@@ -243,7 +243,7 @@ class HeartRateDay:
             points = points + [0] * (288 - len(points))
 
         out = []
-        ts = datetime(self.timestamp.year, self.timestamp.month, self.timestamp.day, tzinfo=UTC)
+        ts = self.timestamp
         interval = timedelta(minutes=5)
         for reading in points:
             out.append((reading, ts))
@@ -252,7 +252,8 @@ class HeartRateDay:
 
 
 class HeartRateDayParser:
-    def __init__(self) -> None:
+    def __init__(self, *, clock_mode: str = "utc") -> None:
+        self.clock_mode = clock_mode
         self.reset()
 
     def reset(self) -> None:
@@ -274,7 +275,7 @@ class HeartRateDayParser:
         if self._is_today() and sub_type == 23:
             result = HeartRateDay(
                 heart_rates=self.heart_rates,
-                timestamp=self.timestamp or date_utils.start_of_day(date_utils.utc_now()),
+                timestamp=self.timestamp or date_utils.start_of_clock_day(date_utils.local_now() if self.clock_mode == "local" else date_utils.utc_now(), self.clock_mode),
                 size=self.size,
                 index=self.index,
                 range=self.range,
@@ -300,7 +301,7 @@ class HeartRateDayParser:
         if sub_type == self.size - 1:
             result = HeartRateDay(
                 heart_rates=self.heart_rates,
-                timestamp=self.timestamp or date_utils.start_of_day(date_utils.utc_now()),
+                timestamp=self.timestamp or date_utils.start_of_clock_day(date_utils.local_now() if self.clock_mode == "local" else date_utils.utc_now(), self.clock_mode),
                 size=self.size,
                 index=self.index,
                 range=self.range,
@@ -318,16 +319,17 @@ class HeartRateDayParser:
             heart_rates.extend([0] * (288 - len(heart_rates)))
 
         if self._is_today():
-            cutoff = date_utils.minutes_so_far(date_utils.utc_now()) // 5
+            now = date_utils.local_now() if self.clock_mode == "local" else date_utils.utc_now()
+            cutoff = date_utils.minutes_so_far_clock(now, self.clock_mode) // 5
             heart_rates[cutoff:] = [0] * len(heart_rates[cutoff:])
         return heart_rates
 
     def _is_today(self) -> bool:
-        return self.timestamp is not None and date_utils.is_today(self.timestamp)
+        return self.timestamp is not None and date_utils.is_today_clock(self.timestamp, self.clock_mode)
 
 
-def read_heart_rate_packet(target: datetime) -> bytearray:
-    ts = int(date_utils.start_of_day(target).timestamp())
+def read_heart_rate_packet(target: datetime, *, clock_mode: str = "utc") -> bytearray:
+    ts = int(date_utils.start_of_clock_day(target, clock_mode).timestamp())
     return make_packet(CMD_READ_HEART_RATE, bytearray(struct.pack("<L", ts)))
 
 

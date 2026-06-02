@@ -63,7 +63,28 @@ def minutes_so_far(ts: datetime) -> int:
     return round(delta.total_seconds() / 60) + 1
 
 
+def minutes_so_far_clock(ts: datetime, mode: str) -> int:
+    if mode == "utc":
+        return minutes_so_far(ts)
+    if mode == "local":
+        dt = ts.astimezone()
+        midnight = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        delta = dt - midnight
+        return round(delta.total_seconds() / 60) + 1
+    raise ValueError(f"unsupported device clock mode: {mode}")
+
+
 def is_today(ts: datetime) -> bool:
     dt = ts.astimezone(UTC)
     now = utc_now()
     return (dt.year, dt.month, dt.day) == (now.year, now.month, now.day)
+
+
+def is_today_clock(ts: datetime, mode: str) -> bool:
+    if mode == "utc":
+        return is_today(ts)
+    if mode == "local":
+        dt = ts.astimezone()
+        now = local_now()
+        return (dt.year, dt.month, dt.day) == (now.year, now.month, now.day)
+    raise ValueError(f"unsupported device clock mode: {mode}")

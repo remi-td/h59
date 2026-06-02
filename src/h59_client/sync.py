@@ -101,9 +101,9 @@ async def _query_steps(transport: PacketTransport, *, day_offset: int):
         return parsed, packets, observed_at
 
 
-async def _query_heart_rate_day(transport: PacketTransport, *, target: datetime):
-    parser = HeartRateDayParser()
-    await transport.send_packet(read_heart_rate_packet(target))
+async def _query_heart_rate_day(transport: PacketTransport, *, target: datetime, device_clock_mode: str):
+    parser = HeartRateDayParser(clock_mode=device_clock_mode)
+    await transport.send_packet(read_heart_rate_packet(target, clock_mode=device_clock_mode))
     packets: list[str] = []
     observed_at = date_utils.utc_now().isoformat()
     while True:
@@ -547,7 +547,11 @@ async def sync_one_h59(
                                 device_clock_mode=device_clock_mode,
                             )
 
-                    hr_day, hr_packets, _ = await _query_heart_rate_day(transport, target=target_day)
+                    hr_day, hr_packets, _ = await _query_heart_rate_day(
+                        transport,
+                        target=target_day,
+                        device_clock_mode=device_clock_mode,
+                    )
                     hr_has_data = not isinstance(hr_day, NoData)
                     if not isinstance(hr_day, NoData):
                         database.record_heart_rate_day(
