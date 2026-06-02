@@ -236,3 +236,87 @@ Proven on 2026-05-31:
   - a few short non-empty payloads at `44`, `67 -> 68`, and `90`
   - a uniform one-byte body `40` for every tested id `91..140`
 - none of those Big Data responses looked like an hourly paired systolic/diastolic history stream
+
+Proven on 2026-06-02 against app screenshots taken around `21:01` local time (`Europe/Paris`), with the bracelet and vendor app both switched to local clock mode:
+- the vendor app should be treated as the source of truth for local-clock reconciliation of currently visible historical rows
+- a clean sync with `--device-clock local` reproduced three distinct packet families:
+  - `0x37` pressure/stress history
+  - `0x39` HRV history
+  - Big Data `0x2a` blood oxygen history
+
+Pressure / stress-like reconciliation:
+- the app's visible stress rows matched the `0x37` values exactly
+- matching rule:
+  - `sample_index` is a local half-hour-of-day slot
+  - zero-valued slots are omitted by the app
+- example visible app rows:
+  - `21:00 -> 32`
+  - `18:30 -> 44`
+  - `18:00 -> 46`
+  - `17:30 -> 35`
+- matching raw decoded rows from the same sync carried those exact values at indexes:
+  - `42 -> 32`
+  - `37 -> 44`
+  - `36 -> 46`
+  - `35 -> 35`
+- implication:
+  - our current storage anchoring for `pressure_samples` is off by the local UTC offset when the bracelet clock is in local mode
+
+HRV reconciliation:
+- the app's visible HRV rows matched the decoded `0x39` values, but not the current stored timestamps
+- matching rule:
+  - `sample_index` behaves like a local hour-of-day slot
+  - zero-valued slots are omitted by the app
+  - the current parser's `range_minutes = 30` does not match the app-visible history cadence for this packet family
+- example visible app rows:
+  - `21:00 -> 38 ms`
+  - `18:00 -> 44 ms`
+  - `17:00 -> 35 ms`
+  - `16:00 -> 38 ms`
+- matching decoded value indexes from the same sync:
+  - `21 -> 38`
+  - `18 -> 44`
+  - `17 -> 35`
+  - `16 -> 38`
+- indexes `19` and `20` decoded as zero in that same payload, which explains why the app jumped from `18:00` to `21:00`
+- implication:
+  - `0x39` is not just suffering from timezone anchoring; its visible app cadence is also being misinterpreted by the current decoder
+
+Blood oxygen reconciliation:
+- the local-clock Big Data `0x2a` payload changed shape compared with earlier UTC-clock captures
+- captured local-clock example:
+  - packet length `153` bytes
+  - declared data length `147`
+  - body flag byte `2`
+- the current parser incorrectly treats the whole body as a flat 2-byte min/max stream
+- in the local-clock payload, the tail region beginning at payload offset `112` contained duplicated hourly values:
+  - `98, 98, 97, 96, 96, 97, 96, 96, 98, 97, 99, 98, 0, 0, 0, 0, 0`
+- those values matched the app's visible hourly rows from `07:00-08:00` through `18:00-19:00` exactly:
+  - `07:00-08:00 -> 98-98`
+  - `08:00-09:00 -> 98-98`
+  - `09:00-10:00 -> 97-97`
+  - `10:00-11:00 -> 96-96`
+  - `11:00-12:00 -> 96-96`
+  - `12:00-13:00 -> 97-97`
+  - `13:00-14:00 -> 96-96`
+  - `14:00-15:00 -> 96-96`
+  - `15:00-16:00 -> 98-98`
+  - `16:00-17:00 -> 97-97`
+  - `17:00-18:00 -> 99-99`
+  - `18:00-19:00 -> 98-98`
+- implication:
+  - the local-clock `0x2a` payload contains an hourly summary tail the current parser ignores completely
+  - the existing `BloodOxygenHistory.samples_with_times()` model is not valid for that payload shape
+
+Historical blood pressure reconciliation:
+- the vendor app screenshot showed hourly paired values such as:
+  - `19:00 -> 122/82`
+  - `18:00 -> 124/86`
+  - `17:00 -> 127/86`
+  - `16:00 -> 130/90`
+  - `15:00 -> 128/89`
+- the visible pattern repeated cyclically in the screenshot, which does not resemble the other captured historical series
+- the clean local-clock sync still did not capture any historical paired-BP packet family beyond the already known settings and realtime paths
+- implication:
+  - the app's historical BP screen still does not map to a proven raw history packet in the local sync traffic
+  - those rows should not currently be used to infer `0x37`, `0x39`, or Big Data `0x2a` semantics

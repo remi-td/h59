@@ -65,8 +65,11 @@ def device_clock_now(mode: str) -> datetime:
     raise ValueError(f"unsupported device clock mode: {mode}")
 
 
-def determine_history_selector(*, now: datetime, target: datetime) -> int:
-    day_offset = (date_utils.start_of_day(now).date() - date_utils.start_of_day(target).date()).days
+def determine_history_selector(*, now: datetime, target: datetime, device_clock_mode: str = "utc") -> int:
+    day_offset = (
+        date_utils.start_of_clock_day(now, device_clock_mode).date()
+        - date_utils.start_of_clock_day(target, device_clock_mode).date()
+    ).days
     if day_offset < 0:
         raise ValueError("target cannot be in the future")
     return day_offset
@@ -349,22 +352,24 @@ def determine_sync_dates(
     now: datetime,
     last_sync_at: datetime | None,
     incremental: bool,
+    device_clock_mode: str = "utc",
 ) -> list[datetime]:
     if incremental and last_sync_at is not None:
-        start = date_utils.start_of_day(last_sync_at)
+        start = date_utils.start_of_clock_day(last_sync_at, device_clock_mode)
     else:
-        start = date_utils.start_of_day(now)
-    return list(date_utils.dates_between(start, now))
+        start = date_utils.start_of_clock_day(now, device_clock_mode)
+    return list(date_utils.dates_between_clock(start, now, device_clock_mode))
 
 
 def determine_initial_backfill_dates(
     *,
     now: datetime,
     max_days: int = INITIAL_BACKFILL_MAX_DAYS,
+    device_clock_mode: str = "utc",
 ) -> list[datetime]:
     if max_days < 1:
         raise ValueError("max_days must be >= 1")
-    today = date_utils.start_of_day(now)
+    today = date_utils.start_of_clock_day(now, device_clock_mode)
     return [today - timedelta(days=day_offset) for day_offset in range(max_days)]
 
 
@@ -482,13 +487,19 @@ async def sync_one_h59(
                             history=blood_oxygen_history,
                             raw_packet_hex=blood_oxygen_payload_hex,
                             source_command=BIGDATA_BLOOD_OXYGEN_ID,
+                            device_clock_mode=device_clock_mode,
                         )
 
                 if incremental and last_sync_at is None:
-                    targets = determine_initial_backfill_dates(now=now)
+                    targets = determine_initial_backfill_dates(now=now, device_clock_mode=device_clock_mode)
                     empty_history_streak = 0
                 else:
-                    targets = determine_sync_dates(now=now, last_sync_at=last_sync_at, incremental=incremental)
+                    targets = determine_sync_dates(
+                        now=now,
+                        last_sync_at=last_sync_at,
+                        incremental=incremental,
+                        device_clock_mode=device_clock_mode,
+                    )
                     empty_history_streak = None
 
                 attempted_days = 0
@@ -496,7 +507,7 @@ async def sync_one_h59(
                 hrv_history_exhausted = False
                 for target_day in targets:
                     attempted_days += 1
-                    day_offset = determine_history_selector(now=now, target=target_day)
+                    day_offset = determine_history_selector(now=now, target=target_day, device_clock_mode=device_clock_mode)
 
                     if not pressure_history_exhausted:
                         pressure_history, pressure_packets, _pressure_ts, pressure_target = await _query_pressure_history(
@@ -514,6 +525,7 @@ async def sync_one_h59(
                                 history=pressure_history,
                                 raw_packet_hex=",".join(pressure_packets),
                                 source_command=CMD_PRESSURE_HISTORY,
+                                device_clock_mode=device_clock_mode,
                             )
 
                     if not hrv_history_exhausted:
@@ -532,6 +544,7 @@ async def sync_one_h59(
                                 history=hrv_history,
                                 raw_packet_hex=",".join(hrv_packets),
                                 source_command=CMD_HRV_HISTORY,
+                                device_clock_mode=device_clock_mode,
                             )
 
                     hr_day, hr_packets, _ = await _query_heart_rate_day(transport, target=target_day)

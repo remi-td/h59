@@ -4,10 +4,12 @@ import time
 
 from h59_client.protocol import (
     ActivityBlockParser,
+    HrvHistory,
     HrvHistoryParser,
     HeartRateDayParser,
     PERIODIC_MEASUREMENT_SETTINGS,
     PeriodicMeasurementSetting,
+    PressureHistory,
     PressureHistoryParser,
     parse_bigdata_blood_oxygen,
     parse_bigdata_sleep,
@@ -218,7 +220,7 @@ def test_parse_hrv_history_packets():
         result = parser.parse(bytearray.fromhex(packet))
 
     assert result is not None
-    assert result.range_minutes == 30
+    assert result.range_minutes == 60
     assert result.values[:5] == [47, 44, 45, 43, 50]
     assert [value for value in result.values if value][-1] == 38
 
@@ -274,3 +276,36 @@ def test_parse_bigdata_blood_oxygen_payload():
     samples = history.samples_with_times(datetime(2026, 5, 26, 12, 0, tzinfo=UTC))
     assert len(samples) == 48
     assert samples[-1][1] == datetime(2026, 5, 26, 23, 30, tzinfo=UTC)
+
+
+def test_parse_bigdata_blood_oxygen_payload_local_hourly_tail():
+    payload = bytes.fromhex(
+        "bc2a930052c202616163636161606062626161626263636363616162626262616161616363636300006262626261616161626262620161616262626262636362620000616161616060636361616262626263636161616161616363606060606363626261610062626363626263636060606061616262626261616060606061616060606062626161636362620000000000000000000000"
+    )
+
+    history = parse_bigdata_blood_oxygen(payload)
+
+    assert history.unknown_flag == 2
+    assert history.interval_minutes == 60
+    assert history.start_index == 7
+    assert [sample.min_percent for sample in history.samples[:12]] == [98, 98, 97, 96, 96, 97, 96, 96, 98, 97, 99, 98]
+
+
+def test_local_clock_slot_histories_use_local_day_anchor(monkeypatch):
+    previous_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "Europe/Paris")
+        time.tzset()
+        pressure = PressureHistory(values=[32], range_minutes=30)
+        hrv = HrvHistory(values=[38], range_minutes=60)
+        pressure_ts = pressure.readings_with_times(datetime(2026, 6, 2, 12, 0, tzinfo=UTC), clock_mode="local")[0][1]
+        hrv_ts = hrv.readings_with_times(datetime(2026, 6, 2, 12, 0, tzinfo=UTC), clock_mode="local")[0][1]
+    finally:
+        if previous_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous_tz)
+        time.tzset()
+
+    assert pressure_ts == datetime(2026, 6, 1, 22, 0, tzinfo=UTC)
+    assert hrv_ts == datetime(2026, 6, 1, 22, 0, tzinfo=UTC)

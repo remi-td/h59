@@ -6,6 +6,7 @@ Date:
 - updated 2026-05-28 with fresh retention and gap-recovery checks
 - updated 2026-05-30 with fresh sleep-history revalidation
 - updated 2026-05-30 with fresh blood-pressure path revalidation
+- updated 2026-06-02 with local-clock reconciliation against vendor-app screenshots
 
 ## Goal
 
@@ -27,9 +28,14 @@ What is now proven:
 - older-than-today pressure history is available
 - older-than-today HRV history is available
 - a fresh 7-day backfill query recovered all available history back to the device's first-use date
+- local-clock reconciliation is now proven for:
+  - pressure / stress-like history (`0x37`)
+  - HRV history (`0x39`)
+  - the hourly SpO2 tail inside local-clock Big Data `0x2a`
 
 What remains unresolved:
 - historical blood-pressure backfill
+- the heart-rate current-day path still mixes UTC assumptions with bracelet-local clock behavior
 
 ## Findings
 
@@ -56,10 +62,13 @@ Assessment:
 Result:
 - realtime requests produced valid replies with zero values
 - the secondary Big Data service returned historical oxygen samples
+- on 2026-06-02, with the bracelet and vendor app both switched to local clock mode, the visible app rows matched an hourly tail region inside the Big Data `0x2a` payload rather than the older flat 30-minute min/max interpretation
 
 Assessment:
 - historical SpO2 is available
 - the current realtime path is not sufficient
+- local-clock `0x2a` payloads are not modeled correctly by the old decoder
+- the visible app history aligns with hourly rows from `07:00-08:00` onward, not with a naive UTC-midnight 30-minute slot stream
 
 ### Pressure / Stress-like History
 
@@ -77,7 +86,7 @@ Result:
 
 Assessment:
 - historical pressure/stress-like data is available
-- the current sync bug is that it always sends selector `0`, so it only captures today
+- selector handling was the first sync bug; live reconciliation also showed that local-clock timestamps must be anchored to bracelet-local half-hour slots
 - the first request byte should be treated as a day/history selector, not a fixed constant
 - the same-day `selector 0` payload can stall before day-end while still returning explicit zeroes for later slots
 - on 2026-05-31 the bracelet returned non-zero values only through `17:00 UTC`, then zeroes for the rest of the current-day pressure/stress buffer
@@ -88,6 +97,7 @@ Assessment:
 - a live round-trip write through the CLI proved this setting can be changed:
   - `h59 device set stress on ...`
   - follow-up read confirmed `enabled = 1`
+- on 2026-06-02, local-clock app screenshots matched the decoded values exactly when `sample_index` was interpreted as a local half-hour-of-day slot and zero-valued slots were omitted from display
 
 ### HRV History
 
@@ -103,17 +113,17 @@ Result:
 
 Assessment:
 - historical HRV is available
-- the decoder still needs refinement
-- the current sync bug is that it always sends selector `0`, so it only captures today
+- selector handling was the first sync bug; local-clock reconciliation then showed the visible app cadence is hourly for this packet family
 - the first request byte should be treated as a day/history selector, not a fixed constant
 - same-day `selector 0` is also a partial series
 - on 2026-05-31 the bracelet returned non-zero HRV values only through `08:30 UTC`, then zeroes
-- the current proven `0x39` split layout can hold only about `25` 16-bit samples total, which is only about `12.5` hours at a `30` minute interval
+- the current proven `0x39` split layout can hold only about `25` 16-bit samples total
 - that capacity ceiling matches the observed data: current and historical HRV days top out around `18..24` half-hour points, never a full `48`
 - this strongly suggests that a full same-day HRV view would require either another selector semantics or a different endpoint than the currently proven `0x39` path
 - a live settings read on 2026-05-31 showed HRV detection enabled at that moment:
   - `3801010000000000000000000000003a`
   - interpreted as `command=56`, `action=1` (read), `enabled=1`
+- on 2026-06-02, app screenshots matched decoded `0x39` values when `sample_index` was treated as a local hour-of-day slot and zero-valued hours were omitted
 
 ### Blood Pressure
 
@@ -237,6 +247,37 @@ Assessment:
 - historical reads appear non-destructive
 - currently missing intervals cannot be recovered if the bracelet itself no longer returns them during a fresh pull
 
+### Local-Clock Reconciliation (2026-06-02)
+
+Result:
+- screenshots were taken from the vendor app around `21:01` local time (`Europe/Paris`) after switching both the bracelet and the app to local-clock mode
+- a clean sync with `--device-clock local` was compared directly against those screenshots
+- pressure / stress-like history matched the app exactly when `sample_index` was interpreted as a local half-hour slot
+- HRV matched the app values when `sample_index` was interpreted as a local hour slot
+- the local-clock Big Data `0x2a` payload exposed an hourly SpO2 tail that matched the app exactly
+- historical blood-pressure rows shown by the vendor app still did not map to any proven historical sync packet family
+
+Assessment:
+- the slot-based historical metrics should not be anchored blindly to UTC midnight
+- bracelet clock mode affects not only the set-time handshake but also how historical slot indexes need to be interpreted locally
+- the heart-rate historical path remains different from the slot-based metrics because it is currently requested and truncated using UTC assumptions
+
+### Heart Rate
+
+Result:
+- the vendor app heart-rate screenshot showed local rows such as `20:50`, `20:45`, and `20:40`
+- the clean local-clock sync still produced gaps around the corresponding UTC period
+- after the slot-metric fixes, the remaining problem became clearer:
+  - the request timestamp for heart-rate day history is still built from `UTC midnight`
+  - current-day truncation in the parser still uses `utc_now()`
+
+Assessment:
+- heart rate is not mainly a decoder-value problem
+- it is a request/day-boundary problem:
+  - the client can ask the bracelet for the wrong day when the bracelet clock is local
+  - even when the returned values are otherwise correct, the parser can cut off current-day points too early in local time
+- heart-rate history therefore remains partially unresolved even though the slot-based metrics are now reconciled
+
 ## Practical Conclusion
 
 The missing pressure and HRV history were not mainly a “not enough history” problem.
@@ -269,10 +310,7 @@ Sleep is narrower than pressure and HRV:
 
 ## Next Implementation Steps
 
-1. Update `read_pressure_history_packet()` and `read_hrv_history_packet()` so the first request byte is a selector parameter instead of a hard-coded `0`.
-2. Iterate selectors during backfill and incremental sync until the device returns `0xFF` no-data.
-3. Keep the secondary Big Data transport for sleep and blood oxygen.
-4. Refine the HRV decoder to 16-bit sample parsing and trim trailing empty slots correctly.
-5. Investigate historical blood pressure separately from the active `HealthCheck` measurement path.
-6. Reconcile the current sleep parser with the older probe parser and revalidate `days_ago` / `bytes_used` semantics.
-7. Check whether the Big Data sleep request supports a history selector or alternate request shape for older nights.
+1. Fix the heart-rate day request and current-day cutoff so they use bracelet clock mode instead of hard-coded UTC day semantics.
+2. Investigate historical blood pressure separately from the active `HealthCheck` measurement path.
+3. Reconcile the current sleep parser with the older probe parser and revalidate `days_ago` / `bytes_used` semantics.
+4. Check whether the Big Data sleep request supports a history selector or alternate request shape for older nights.

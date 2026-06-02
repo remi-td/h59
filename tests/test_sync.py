@@ -1,5 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
+import os
+import time
 
 from h59_client.devices import DeviceTarget
 from h59_client.protocol import RealTimeSample
@@ -55,6 +57,25 @@ def test_determine_history_selector_uses_utc_day_offset():
     assert determine_history_selector(now=now, target=datetime(2026, 5, 27, 0, 0, tzinfo=UTC)) == 0
     assert determine_history_selector(now=now, target=datetime(2026, 5, 26, 0, 0, tzinfo=UTC)) == 1
     assert determine_history_selector(now=now, target=datetime(2026, 5, 24, 0, 0, tzinfo=UTC)) == 3
+
+
+def test_determine_history_selector_uses_local_day_offset(monkeypatch):
+    previous_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "Europe/Paris")
+        time.tzset()
+        now = datetime(2026, 6, 2, 0, 30, tzinfo=UTC)
+        assert determine_history_selector(
+            now=now,
+            target=datetime(2026, 6, 1, 22, 0, tzinfo=UTC),
+            device_clock_mode="local",
+        ) == 0
+    finally:
+        if previous_tz is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous_tz)
+        time.tzset()
 
 
 def test_realtime_h59_stdout_mode_skips_database_persistence(monkeypatch, tmp_path):

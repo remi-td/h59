@@ -56,3 +56,9 @@ It is not sufficient for full H59 historical coverage, especially for:
 - blood oxygen
 - pressure/stress-like history
 - HRV history
+
+It is also not sufficient for the bracelet-clock reconciliation work proved on 2026-06-02:
+- local-clock `0x37` pressure/stress slots need bracelet-local half-hour anchoring
+- local-clock `0x39` HRV slots need bracelet-local hourly anchoring
+- local-clock Big Data `0x2a` exposes an hourly SpO2 tail with no equivalent in the external client
+- heart-rate current-day behavior still needs H59-specific investigation because the remaining issue is now about day-boundary semantics, not generic packet framing

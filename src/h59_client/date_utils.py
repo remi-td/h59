@@ -18,6 +18,14 @@ def start_of_day(ts: datetime) -> datetime:
     return ts.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def start_of_clock_day(ts: datetime, mode: str) -> datetime:
+    if mode == "utc":
+        return start_of_day(ts)
+    if mode == "local":
+        return ts.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    raise ValueError(f"unsupported device clock mode: {mode}")
+
+
 def end_of_day(ts: datetime) -> datetime:
     return start_of_day(ts) + timedelta(days=1, microseconds=-1)
 
@@ -26,6 +34,18 @@ def dates_between(start: datetime, end: datetime) -> Iterator[datetime]:
     """Yield one UTC date anchor per day, inclusive."""
     start_day = start_of_day(start)
     end_day = start_of_day(end)
+    if end_day < start_day:
+        raise ValueError("start is after end")
+
+    day = start_day
+    while day <= end_day:
+        yield day
+        day += timedelta(days=1)
+
+
+def dates_between_clock(start: datetime, end: datetime, mode: str) -> Iterator[datetime]:
+    start_day = start_of_clock_day(start, mode)
+    end_day = start_of_clock_day(end, mode)
     if end_day < start_day:
         raise ValueError("start is after end")
 

@@ -389,8 +389,8 @@ class PressureHistory:
     values: list[int]
     range_minutes: int
 
-    def readings_with_times(self, target: datetime) -> list[tuple[int, datetime]]:
-        start = date_utils.start_of_day(target)
+    def readings_with_times(self, target: datetime, *, clock_mode: str = "utc") -> list[tuple[int, datetime]]:
+        start = date_utils.start_of_clock_day(target, clock_mode)
         out = []
         for index, reading in enumerate(self.values):
             out.append((reading, start + timedelta(minutes=index * self.range_minutes)))
@@ -444,8 +444,8 @@ class HrvHistory:
     values: list[int]
     range_minutes: int
 
-    def readings_with_times(self, target: datetime) -> list[tuple[int, datetime]]:
-        start = date_utils.start_of_day(target)
+    def readings_with_times(self, target: datetime, *, clock_mode: str = "utc") -> list[tuple[int, datetime]]:
+        start = date_utils.start_of_clock_day(target, clock_mode)
         out = []
         for index, reading in enumerate(self.values):
             out.append((reading, start + timedelta(minutes=index * self.range_minutes)))
@@ -475,7 +475,10 @@ class HrvHistoryParser:
             return NoData()
         if index == 0:
             self.size = packet[2]
-            self.range_minutes = packet[3]
+            # The protocol header reports `30` here, but live reconciliation
+            # against the vendor app's historical HRV screen shows these slots
+            # are displayed hourly on-device/app.
+            self.range_minutes = 60
             self._raw_values = []
             return None
 
@@ -693,12 +696,14 @@ class BloodOxygenHistory:
     unknown_flag: int
     samples: list[BloodOxygenSample]
     slots_per_day: int = 48
+    interval_minutes: int = 30
+    start_index: int = 0
 
-    def samples_with_times(self, target: datetime, *, interval_minutes: int = 30) -> list[tuple[BloodOxygenSample, datetime]]:
-        start = date_utils.start_of_day(target)
+    def samples_with_times(self, target: datetime, *, clock_mode: str = "utc") -> list[tuple[BloodOxygenSample, datetime]]:
+        start = date_utils.start_of_clock_day(target, clock_mode) + timedelta(minutes=self.start_index * self.interval_minutes)
         out = []
         for index, sample in enumerate(self.samples[: self.slots_per_day]):
-            out.append((sample, start + timedelta(minutes=index * interval_minutes)))
+            out.append((sample, start + timedelta(minutes=index * self.interval_minutes)))
         return out
 
 
@@ -712,6 +717,21 @@ def parse_bigdata_blood_oxygen(payload: bytes) -> BloodOxygenHistory:
 
     unknown_flag = body[0]
     sample_bytes = body[1:]
+    if unknown_flag == 2 and len(sample_bytes) >= 34:
+        # In local-clock mode, the vendor app's visible hourly SpO2 rows map
+        # to the final 17 duplicated byte-pairs in the payload.
+        tail = sample_bytes[-34:]
+        samples = []
+        for index in range(0, len(tail) - 1, 2):
+            samples.append(BloodOxygenSample(min_percent=tail[index], max_percent=tail[index + 1]))
+        return BloodOxygenHistory(
+            unknown_flag=unknown_flag,
+            samples=samples,
+            slots_per_day=len(samples),
+            interval_minutes=60,
+            start_index=7,
+        )
+
     samples = []
     for index in range(0, len(sample_bytes) - 1, 2):
         samples.append(BloodOxygenSample(min_percent=sample_bytes[index], max_percent=sample_bytes[index + 1]))

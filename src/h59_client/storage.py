@@ -1726,20 +1726,26 @@ class H59Database:
         history: BloodOxygenHistory,
         raw_packet_hex: str,
         source_command: int,
-        interval_minutes: int = 30,
+        device_clock_mode: str = "utc",
     ) -> None:
-        cutoff = self._overlap_cutoff(
-            table="blood_oxygen_samples",
-            device_id=device_id,
-            target_day=target,
-            interval_minutes=interval_minutes,
+        interval_minutes = history.interval_minutes
+        cutoff = (
+            self._overlap_cutoff(
+                table="blood_oxygen_samples",
+                device_id=device_id,
+                target_day=target,
+                interval_minutes=interval_minutes,
+            )
+            if device_clock_mode == "utc"
+            else None
         )
         rows = []
-        for sample_index, (sample, timestamp) in enumerate(history.samples_with_times(target, interval_minutes=interval_minutes)):
+        for offset, (sample, timestamp) in enumerate(history.samples_with_times(target, clock_mode=device_clock_mode)):
             if sample.min_percent <= 0 or sample.max_percent <= 0:
                 continue
             if cutoff is not None and timestamp < cutoff:
                 continue
+            sample_index = history.start_index + offset
             rows.append(
                 (
                     device_id,
@@ -1791,15 +1797,20 @@ class H59Database:
         history: PressureHistory,
         raw_packet_hex: str,
         source_command: int,
+        device_clock_mode: str = "utc",
     ) -> None:
-        cutoff = self._overlap_cutoff(
-            table="pressure_samples",
-            device_id=device_id,
-            target_day=target,
-            interval_minutes=max(1, history.range_minutes),
+        cutoff = (
+            self._overlap_cutoff(
+                table="pressure_samples",
+                device_id=device_id,
+                target_day=target,
+                interval_minutes=max(1, history.range_minutes),
+            )
+            if device_clock_mode == "utc"
+            else None
         )
         rows = []
-        for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target)):
+        for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target, clock_mode=device_clock_mode)):
             if value == 0:
                 continue
             if cutoff is not None and timestamp < cutoff:
@@ -1849,15 +1860,20 @@ class H59Database:
         history: HrvHistory,
         raw_packet_hex: str,
         source_command: int,
+        device_clock_mode: str = "utc",
     ) -> None:
-        cutoff = self._overlap_cutoff(
-            table="hrv_samples",
-            device_id=device_id,
-            target_day=target,
-            interval_minutes=max(1, history.range_minutes),
+        cutoff = (
+            self._overlap_cutoff(
+                table="hrv_samples",
+                device_id=device_id,
+                target_day=target,
+                interval_minutes=max(1, history.range_minutes),
+            )
+            if device_clock_mode == "utc"
+            else None
         )
         rows = []
-        for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target)):
+        for sample_index, (value, timestamp) in enumerate(history.readings_with_times(target, clock_mode=device_clock_mode)):
             if value == 0:
                 continue
             if cutoff is not None and timestamp < cutoff:
