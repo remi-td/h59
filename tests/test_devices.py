@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+from bleak.exc import BleakDBusError
+
 from h59_client.ble import discover_h59_devices
 from h59_client.devices import looks_like_device_address, resolve_single_target
 from h59_client.storage import H59Database
@@ -77,6 +79,40 @@ def test_discover_h59_devices_respects_non_generic_name_filter(monkeypatch):
 
     assert strict_matches == []
     assert len(generic_matches) == 1
+
+
+def test_discover_h59_devices_retries_bluez_scan_in_progress(monkeypatch):
+    calls: list[int] = []
+    delays: list[float] = []
+
+    async def fake_discover(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise BleakDBusError("org.bluez.Error.InProgress", ["Operation already in progress"])
+        return {
+            "one": (
+                SimpleNamespace(address="AA-BB", name="H59_SAMPLE"),
+                SimpleNamespace(
+                    local_name="H59_SAMPLE",
+                    service_uuids=["0000fe00-0000-1000-8000-00805f9b34fb"],
+                    manufacturer_data={0x004C: bytes.fromhex("fee73031")},
+                    service_data={},
+                    rssi=-50,
+                ),
+            )
+        }
+
+    async def fake_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("h59_client.ble.BleakScanner.discover", fake_discover)
+    monkeypatch.setattr("h59_client.ble.asyncio.sleep", fake_sleep)
+
+    matches = asyncio.run(discover_h59_devices(name="H59", timeout=0.1))
+
+    assert len(calls) == 2
+    assert delays == [1.0]
+    assert len(matches) == 1
 
 
 def test_looks_like_device_address_supports_mac_and_uuid():

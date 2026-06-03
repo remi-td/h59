@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakDBusError
 
 from h59_client.protocol import (
     DEVICE_FW_UUID,
@@ -25,8 +26,28 @@ def utc_now_iso() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
+BLUEZ_SCAN_IN_PROGRESS_ERROR = "org.bluez.Error.InProgress"
+BLUEZ_SCAN_RETRY_COUNT = 3
+BLUEZ_SCAN_RETRY_DELAY = 1.0
+
+
+def _is_bluez_scan_in_progress_error(exc: Exception) -> bool:
+    return isinstance(exc, BleakDBusError) and exc.dbus_error == BLUEZ_SCAN_IN_PROGRESS_ERROR
+
+
+async def _discover_with_retry(timeout: float) -> dict[str, Any]:
+    for attempt in range(BLUEZ_SCAN_RETRY_COUNT + 1):
+        try:
+            return await BleakScanner.discover(timeout=timeout, return_adv=True)
+        except Exception as exc:
+            if not _is_bluez_scan_in_progress_error(exc) or attempt >= BLUEZ_SCAN_RETRY_COUNT:
+                raise
+            # BlueZ can briefly report an existing active scan even when it clears a moment later.
+            await asyncio.sleep(BLUEZ_SCAN_RETRY_DELAY)
+
+
 async def discover_h59_devices(name: str | None = None, timeout: float = 20.0) -> list[dict[str, Any]]:
-    devices = await BleakScanner.discover(timeout=timeout, return_adv=True)
+    devices = await _discover_with_retry(timeout)
     matches: list[tuple[int, Any, Any, dict[str, str]]] = []
     generic_name = not name or name == "H59"
     for device, adv in devices.values():

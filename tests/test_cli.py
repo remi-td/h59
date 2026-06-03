@@ -5,7 +5,7 @@ from pathlib import Path
 import signal
 from typing import Any
 
-from bleak.exc import BleakError
+from bleak.exc import BleakDBusError, BleakError
 import pytest
 
 from h59_client.cli import (
@@ -416,6 +416,13 @@ def test_format_operational_error_for_bluetooth_unavailable():
     assert message is not None
     assert "Bluetooth is not available" in message
     assert "Bluetooth permission" in message
+
+
+def test_format_operational_error_for_bluez_scan_in_progress():
+    message = format_operational_error(BleakDBusError("org.bluez.Error.InProgress", ["Operation already in progress"]))
+    assert message is not None
+    assert "Bluetooth discovery is already busy right now." in message
+    assert "stop other Bluetooth scan tools or apps first" in message
 
 
 def test_format_operational_error_for_timeout():

@@ -26,6 +26,11 @@ except ImportError:  # pragma: no cover - older bleak versions do not expose thi
     BleakBluetoothNotAvailableError = None  # type: ignore[assignment]
 
 try:
+    from bleak.exc import BleakDBusError
+except ImportError:  # pragma: no cover - older bleak versions do not expose this class
+    BleakDBusError = None  # type: ignore[assignment]
+
+try:
     from bleak.exc import BleakDeviceNotFoundError
 except ImportError:  # pragma: no cover - older bleak versions do not expose this class
     BleakDeviceNotFoundError = None  # type: ignore[assignment]
@@ -113,6 +118,12 @@ def format_operational_error(exc: Exception) -> str | None:
             "Bluetooth is not available for H59 discovery right now.\n"
             "Check that Bluetooth is enabled and that this process has Bluetooth permission.\n"
             "If the bracelet is currently connected to a phone or another app, disconnect or unpair it temporarily and try again."
+        )
+    if BleakDBusError is not None and isinstance(exc, BleakDBusError) and exc.dbus_error == "org.bluez.Error.InProgress":
+        return (
+            "Bluetooth discovery is already busy right now.\n"
+            "Another Bluetooth scan is still active in BlueZ, so this command could not start its own scan.\n"
+            "Wait a moment and try again. If this keeps happening, stop other Bluetooth scan tools or apps first."
         )
     if BleakDeviceNotFoundError is not None and isinstance(exc, BleakDeviceNotFoundError):
         return (
