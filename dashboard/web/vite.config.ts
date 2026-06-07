@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5173,
+    allowedHosts: ["rock.local"],
     proxy: {
       "/api": {
         target: process.env.VITE_H59_API_BASE_URL || "http://127.0.0.1:8000",

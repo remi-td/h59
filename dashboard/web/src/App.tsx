@@ -5,6 +5,7 @@ import { useBootstrapData } from "./api/hooks";
 import { PageHeader } from "./components/PageHeader";
 
 const Today = lazy(() => import("./pages/Today").then((module) => ({ default: module.Today })));
+const Insights = lazy(() => import("./pages/Insights").then((module) => ({ default: module.Insights })));
 const Trends = lazy(() => import("./pages/Trends").then((module) => ({ default: module.Trends })));
 const Sleep = lazy(() => import("./pages/Sleep").then((module) => ({ default: module.Sleep })));
 const Heart = lazy(() => import("./pages/Heart").then((module) => ({ default: module.Heart })));
@@ -14,7 +15,8 @@ const Device = lazy(() => import("./pages/Device").then((module) => ({ default: 
 const Debug = lazy(() => import("./pages/Debug").then((module) => ({ default: module.Debug })));
 
 const NAV_ITEMS = [
-  ["Today", "/"],
+  ["Insights", "/"],
+  ["Today", "/today"],
   ["Trends", "/trends"],
   ["Sleep", "/sleep"],
   ["Heart", "/heart"],
@@ -42,8 +44,10 @@ export default function App() {
   const selectedDevice =
     devices.find((item) => (device === "preferred" && item.is_preferred) || item.nickname === device || String(item.id) === device || item.address === device) ?? null;
 
+  const isInsightsPage = location.pathname === "/";
+
   useEffect(() => {
-    if (location.pathname !== "/") {
+    if (location.pathname !== "/today") {
       setReportDate(null);
     }
   }, [location.pathname]);
@@ -66,7 +70,7 @@ export default function App() {
 
       <main className="app-main">
         <PageHeader
-          title="Daily Health Review"
+          title={isInsightsPage ? "Health Insights" : "Daily Health Review"}
           subtitle={health ? `${health.device_count} registered device${health.device_count === 1 ? "" : "s"} · ${health.db_path}` : "Connecting to local API"}
           reportDate={reportDate}
           lastSync={selectedDevice?.last_sync ?? null}
@@ -78,7 +82,8 @@ export default function App() {
         {error ? <div className="panel-error">{error}</div> : null}
         <Suspense fallback={<div className="panel-loading">Loading dashboard page…</div>}>
           <Routes>
-            <Route path="/" element={<Today device={device} onReportDateChange={setReportDate} />} />
+            <Route path="/" element={<Insights device={device} />} />
+            <Route path="/today" element={<Today device={device} onReportDateChange={setReportDate} />} />
             <Route path="/trends" element={<Trends device={device} />} />
             <Route path="/sleep" element={<Sleep device={device} />} />
             <Route path="/heart" element={<Heart device={device} />} />

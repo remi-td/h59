@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import Settings, get_settings
 from .db import connect
 from .device_context import preferred_device_id, require_device_context
+from .insights import current_insight_payload
 from .queries import (
     data_quality_payload,
     debug_payload,
@@ -19,6 +20,7 @@ from .queries import (
     today_payload,
 )
 from .schemas import (
+    CurrentInsightResponse,
     DataQualityResponse,
     DebugResponse,
     DeviceStatusResponse,
@@ -95,6 +97,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ensure_analytic_surface(conn)
             context = require_device_context(conn, device)
             return data_quality_payload(conn, context.resolved)
+
+    @app.get("/api/insights/current", response_model=CurrentInsightResponse)
+    def api_current_insight(device: str = Query(default="preferred")) -> CurrentInsightResponse:
+        with connect(settings) as conn:
+            ensure_analytic_surface(conn)
+            context = require_device_context(conn, device)
+            return CurrentInsightResponse.model_validate(current_insight_payload(conn, context.resolved, is_preferred=context.is_preferred))
 
     @app.get("/api/debug", response_model=DebugResponse)
     def api_debug(device: str = Query(default="preferred")) -> DebugResponse:

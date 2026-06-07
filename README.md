@@ -195,8 +195,17 @@ Clock mode:
 
 ## Dashboard services
 
-This project provides a REST API and dashboard services to easily access the analytical data. These services are not installed through the CLI package. 
-They live under `dashboard/` and is run from the source checkout.
+This project provides a REST API and dashboard services to easily access the analytical data. These services are not installed through the CLI package.
+They live under `dashboard/` and are run from the source checkout.
+
+The dashboard opens on a dedicated Health Insights page. It combines reusable local SQLite feature views with deterministic Python scoring to show:
+
+- current physiological state and recommended action
+- readiness, sleep, and activity-strain scores
+- sync freshness, latest band sync, and confidence level
+- key explanatory factors and safety/LLM guardrails
+
+The insight is a coaching-oriented summary of local wearable patterns, not a medical diagnosis. It explicitly downgrades confidence when band data is stale or incomplete.
 
 Clone the repo first, then use the runner:
 
@@ -218,6 +227,18 @@ Open:
 ```text
 http://127.0.0.1:5173
 ```
+
+Useful API endpoints include:
+
+- `GET /api/health`
+- `GET /api/devices`
+- `GET /api/insights/current?device=preferred`
+- `GET /api/today`
+- `GET /api/metrics/{metric}`
+- `GET /api/sleep`
+- `GET /api/device/status`
+- `GET /api/data-quality`
+- `GET /api/debug`
 
 The runner will:
 - create and update `dashboard/api/.venv`

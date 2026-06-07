@@ -1,6 +1,7 @@
 import { DependencyList, useEffect, useState } from "react";
 import { dashboardApi } from "./client";
 import type {
+  CurrentInsightResponse,
   DataQualityResponse,
   DebugResponse,
   DeviceStatusResponse,
@@ -89,6 +90,10 @@ export function useDeviceData(device: string) {
     [device],
     { resetOnLoad: true },
   );
+}
+
+export function useCurrentInsight(device: string) {
+  return useApiResource<CurrentInsightResponse>(() => dashboardApi.currentInsight(device), [device], { resetOnLoad: true });
 }
 
 export function useDebug(device: string) {

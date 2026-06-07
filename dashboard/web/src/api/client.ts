@@ -1,4 +1,5 @@
 import type {
+  CurrentInsightResponse,
   DataQualityResponse,
   DebugResponse,
   DeviceStatusResponse,
@@ -32,5 +33,7 @@ export const dashboardApi = {
     request<DeviceStatusResponse>(`/api/device/status?device=${encodeURIComponent(device)}`),
   dataQuality: (device: string) =>
     request<DataQualityResponse>(`/api/data-quality?device=${encodeURIComponent(device)}`),
+  currentInsight: (device: string) =>
+    request<CurrentInsightResponse>(`/api/insights/current?device=${encodeURIComponent(device)}`),
   debug: (device: string) => request<DebugResponse>(`/api/debug?device=${encodeURIComponent(device)}`),
 };

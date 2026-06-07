@@ -6,14 +6,14 @@ The design follows the separation defined in
 [Visualization Layer Architecture](../docs/software/visualisation_layer_architecture.md):
 
 - `h59` CLI handles BLE, protocol, sync, and SQLite storage
-- the dashboard reads the SQLite database through a small read-only API
+- the dashboard reads the SQLite database through a small local API
 - the browser UI is a mobile-first React app
 
 ## Layout
 
 ```text
 dashboard/
-  api/   FastAPI read-only API over h59.sqlite
+  api/   FastAPI local API over h59.sqlite
   web/   React/Vite front-end
 ```
 
@@ -109,6 +109,33 @@ http://localhost:5173
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8000` by default.
 
+## Health Insights page
+
+The default route, `http://localhost:5173/`, is the Health Insights page. It is intended as a first-stop summary for the selected device before drilling into the historical pages.
+
+The page calls:
+
+```text
+GET /api/insights/current?device=preferred
+```
+
+The endpoint reads the same local SQLite database as the rest of the dashboard and returns:
+
+- `sync_context`: latest band sync, sync age, feature-data age, data freshness, and stale-data warning text
+- `confidence`: `low`, `medium`, or `high`, downgraded when sync data or feature data is stale, partial, empty, or uncertain
+- `state`: an explainable current-state label such as `stable`, `sleep_deprived`, `under_recovered`, `physiological_strain`, `high_strain`, or `measurement_uncertain`
+- `readiness`, `sleep`, and `strain` score objects
+- `key_factors`: the local metrics and baseline deltas that explain the score
+- `safety_flags` and `llm_guardrails`: reminders that wearable data is not diagnostic and abnormal BP/SpO2 observations require confirmation
+
+The scoring layer is deterministic Python application logic in `dashboard/api/src/h59_dashboard_api/insights.py`. Reusable features and rolling baselines stay in SQLite views created by `src/h59_client/analytics.py`:
+
+- `health_daily_features`
+- `health_metric_observations`
+- `health_metric_baselines`
+
+This split keeps ingestion simple: the sync daemon does not need to refresh materialized insight tables. The API ensures the analytic views exist before serving the endpoint.
+
 ## Local Production with Docker
 
 ```bash
@@ -139,12 +166,13 @@ The dashboard stack reads the same SQLite database produced by the CLI:
 
 or whatever `H59_DB_PATH` points to in `.env`.
 
-The API treats the database as read-only.
+The API does not mutate measurement rows. If analytic views are missing after an upgrade, the API may create or refresh those SQLite views so read-only dashboard endpoints can query the current schema.
 
 ## First Implemented Endpoints
 
 - `GET /api/health`
 - `GET /api/devices`
+- `GET /api/insights/current`
 - `GET /api/today`
 - `GET /api/metrics/{metric}`
 - `GET /api/sleep`
@@ -154,6 +182,7 @@ The API treats the database as read-only.
 
 ## First Implemented Pages
 
+- `Insights`
 - `Today`
 - `Trends`
 - `Sleep`

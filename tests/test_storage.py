@@ -1047,3 +1047,84 @@ def test_storage_classifies_sleep_naps_and_excludes_them_from_canonical_view(tmp
     assert int(canonical_row["total_minutes"]) == 594
 
     db.close()
+
+
+
+def test_health_daily_feature_and_baseline_views_are_reusable_without_refresh_tables(tmp_path):
+    db = H59Database(tmp_path / "h59.sqlite")
+    device_id = db.upsert_device(
+        address="AA-BB",
+        name="H59_DEMO",
+        advertisement=None,
+        hw_version=None,
+        fw_version=None,
+        last_seen_at="2026-05-30T08:00:00+00:00",
+    )
+    sync_id = db.create_sync(device_id, started_at="2026-05-30T08:00:00+00:00", source="test")
+    for offset, (day, hrv, rhr, steps) in enumerate(
+        [
+            ("2026-05-27", 44, 61, 4200),
+            ("2026-05-28", 46, 60, 5100),
+            ("2026-05-29", 45, 62, 4800),
+        ]
+    ):
+        db.connection.execute(
+            "INSERT INTO hrv_samples(device_id, sync_id, timestamp, sample_index, value, interval_minutes, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, ?, 30, 57, '')",
+            (device_id, sync_id, f"{day}T06:00:00+00:00", offset, hrv),
+        )
+        db.connection.execute(
+            "INSERT INTO heart_rates(reading, timestamp, device_id, sync_id, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, 21, '')",
+            (rhr, f"{day}T06:00:00+00:00", device_id, sync_id),
+        )
+        db.connection.execute(
+            "INSERT INTO sport_details(calories, steps, distance, timestamp, device_id, sync_id, time_index, source_command, raw_packet_hex) VALUES (100, ?, 1000, ?, ?, ?, 0, 67, '')",
+            (steps, f"{day}T12:00:00+00:00", device_id, sync_id),
+        )
+    db.connection.execute(
+        "INSERT INTO sleep_sessions(device_id, sync_id, start_timestamp, end_timestamp, total_minutes, state, score, is_provisional, source_command, raw_json) VALUES (?, ?, ?, ?, 420, 'decoded', 80, 0, 39, '{}')",
+        (device_id, sync_id, "2026-05-28T23:00:00+00:00", "2026-05-29T06:00:00+00:00"),
+    )
+    session_id = int(db.connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+    db.connection.execute(
+        "INSERT INTO sleep_stage_samples(sleep_session_id, device_id, sync_id, sequence_index, stage, start_timestamp, end_timestamp, minutes, is_provisional, raw_json) VALUES (?, ?, ?, 0, 'deep', '2026-05-28T23:00:00+00:00', '2026-05-29T01:00:00+00:00', 120, 0, '{}')",
+        (session_id, device_id, sync_id),
+    )
+    db.connection.execute(
+        "INSERT INTO sleep_stage_samples(sleep_session_id, device_id, sync_id, sequence_index, stage, start_timestamp, end_timestamp, minutes, is_provisional, raw_json) VALUES (?, ?, ?, 1, 'light', '2026-05-29T01:00:00+00:00', '2026-05-29T06:00:00+00:00', 300, 0, '{}')",
+        (session_id, device_id, sync_id),
+    )
+    db.connection.commit()
+
+    feature = db.connection.execute(
+        """
+        SELECT day_value, valid_to, observation_as_of, hrv_avg, resting_hr_bpm, steps_total, sleep_total_minutes, deep_minutes, activity_load
+        FROM health_daily_features
+        WHERE device_id=? AND day_value='2026-05-29'
+        """,
+        (device_id,),
+    ).fetchone()
+    baseline = db.connection.execute(
+        """
+        SELECT metric, as_of_day, window_days, n_days, mean, median
+        FROM health_metric_baselines
+        WHERE device_id=? AND metric='hrv_avg' AND as_of_day='2026-05-29' AND window_days=30
+        """,
+        (device_id,),
+    ).fetchone()
+
+    assert feature is not None
+    assert int(feature["hrv_avg"]) == 45
+    assert int(feature["resting_hr_bpm"]) == 62
+    assert int(feature["steps_total"]) == 4800
+    assert int(feature["sleep_total_minutes"]) == 420
+    assert int(feature["deep_minutes"]) == 120
+    assert feature["valid_to"] == "2026-05-30T00:00:00+00:00"
+    assert feature["observation_as_of"] == "2026-05-29T13:00:00+00:00"
+    assert float(feature["activity_load"]) > 0
+    assert baseline is not None
+    assert int(baseline["n_days"]) == 3
+    assert float(baseline["mean"]) == 45.0
+    assert float(baseline["median"]) == 45.0
+    assert db.connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'health_%'").fetchone() is None
+
+    db.close()

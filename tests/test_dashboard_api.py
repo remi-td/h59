@@ -302,3 +302,128 @@ def test_dashboard_api_today_uses_realtime_health_check_for_blood_pressure(tmp_p
     payload = today.json()
     bp_card = next(card for card in payload["cards"] if card["id"] == "blood_pressure")
     assert bp_card["display_value"] == "121/79 mmHg"
+
+
+
+def test_insights_current_endpoint_scores_from_python_module_over_database_views(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        device_id = int(db.connection.execute("SELECT device_id FROM devices LIMIT 1").fetchone()[0])
+        sync_id = int(db.connection.execute("SELECT MIN(sync_id) FROM syncs").fetchone()[0])
+        db.upsert_device(
+            address="66:77:88:99:AA:BB",
+            name="H59_OTHER",
+            advertisement=None,
+            hw_version=None,
+            fw_version=None,
+            last_seen_at="2026-05-30T08:00:00+00:00",
+        )
+        db.connection.execute("DELETE FROM heart_rates")
+        db.connection.execute("DELETE FROM hrv_samples")
+        db.connection.execute("DELETE FROM sport_details")
+        rows = [
+            ("2026-05-26", 50, 60, 5000),
+            ("2026-05-27", 50, 60, 5000),
+            ("2026-05-28", 50, 60, 5000),
+            ("2026-05-29", 35, 70, 9000),
+        ]
+        for index, (day, hrv, hr, steps) in enumerate(rows):
+            db.connection.execute(
+                "INSERT INTO hrv_samples(device_id, sync_id, timestamp, sample_index, value, interval_minutes, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, ?, 30, 57, '')",
+                (device_id, sync_id, f"{day}T06:00:00+00:00", index, hrv),
+            )
+            db.connection.execute(
+                "INSERT INTO heart_rates(reading, timestamp, device_id, sync_id, source_command, raw_packet_hex) VALUES (?, ?, ?, ?, 21, '')",
+                (hr, f"{day}T06:00:00+00:00", device_id, sync_id),
+            )
+            db.connection.execute(
+                "INSERT INTO sport_details(calories, steps, distance, timestamp, device_id, sync_id, time_index, source_command, raw_packet_hex) VALUES (100, ?, 1000, ?, ?, ?, 0, 67, '')",
+                (steps, f"{day}T12:00:00+00:00", device_id, sync_id),
+            )
+        fresh_sync_at = datetime.now(UTC).isoformat()
+        next_sync_id = int(db.connection.execute("SELECT MAX(sync_id) + 1 FROM syncs").fetchone()[0])
+        db.connection.execute(
+            "INSERT INTO syncs(sync_id, comment, device_id, timestamp, finished_at, source) VALUES (?, ?, ?, ?, ?, ?)",
+            (next_sync_id, None, device_id, fresh_sync_at, fresh_sync_at, "test"),
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=False,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get(f"/api/insights/current?device={device_id}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["device"]["id"] == device_id
+    assert payload["device"]["is_preferred"] is False
+    assert payload["device"]["last_sync"] is not None
+    assert payload["sync_context"]["latest_band_sync"] == payload["device"]["last_sync"]
+    assert payload["sync_context"]["data_freshness"] == payload["device"]["data_freshness"]
+    assert payload["sync_context"]["data_freshness"] == "fresh"
+    assert payload["sync_context"]["is_stale"] is True
+    assert payload["sync_context"]["data_as_of"] == payload["as_of"]
+    assert "Always check sync_context.latest_band_sync" in " ".join(payload["llm_guardrails"])
+    assert payload["state"] == "measurement_uncertain"
+    assert payload["confidence"] == "low"
+    assert "Latest health features are stale" in payload["sync_context"]["warning"]
+    assert payload["readiness"]["score"] < 70
+    assert payload["strain"]["score"] > 0
+    assert payload["confidence"] in {"low", "medium", "high"}
+    assert any("HRV" in factor for factor in payload["key_factors"])
+    assert any("resting HR" in factor for factor in payload["key_factors"])
+    assert "Do not diagnose" in " ".join(payload["llm_guardrails"])
+
+
+def test_dashboard_api_creates_missing_health_views_when_opened_read_only(tmp_path: Path) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        db.connection.executescript(
+            """
+            DROP VIEW IF EXISTS health_metric_baselines;
+            DROP VIEW IF EXISTS health_metric_observations;
+            DROP VIEW IF EXISTS health_daily_features;
+            """
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=True,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/insights/current")
+    assert response.status_code == 200
+
+    db = H59Database(db_path)
+    try:
+        views = {
+            row["name"]
+            for row in db.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='view' AND name LIKE 'health_%'"
+            ).fetchall()
+        }
+    finally:
+        db.close()
+    assert {"health_daily_features", "health_metric_observations", "health_metric_baselines"}.issubset(views)
