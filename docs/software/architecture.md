@@ -22,8 +22,11 @@ The system follows these principles:
 - `Append and preserve`: raw evidence should remain available even when higher-level interpretations change.
 - `Layered responsibilities`: each module has a clear contract and should not absorb adjacent concerns.
 - `Stateless consumers`: analytics, API, and visualization should recompute from source data at query time unless the cost is clearly prohibitive.
+- `Feature-store first`: reusable feature observations and daily feature rows are the analytics contract; dashboard cards should not grow bespoke raw-table calculations.
+- `Operational simplicity`: prefer SQLite views plus Python scoring over daemon-time materialization until measured latency proves otherwise.
 - `UTC at rest`: timestamps are stored in UTC in the database; display-local time is a presentation concern.
 - `Valid-time analytics`: derived temporal entities are represented as valid `[from, to[` intervals.
+- `Confidence over certainty`: wellness scores must expose provenance, approximation level, confidence, and omitted inputs.
 
 ## High-Level Architecture
 

@@ -67,9 +67,10 @@ GET /api/insights/current?device=preferred
 
 The endpoint uses only the local SQLite store. It computes deterministic, explainable scores from reusable feature views and Python scoring logic:
 
-- `health_daily_features`: day-level reusable physiological/activity/sleep features
-- `health_metric_observations`: normalized metric observations suitable for baselines
-- `health_metric_baselines`: rolling 7/14/30/60-day local baselines
+- `health_feature_observations`: normalized long-form feature rows for series, trends, correlations, and baselines
+- `health_daily_feature_store`: wide per-device/day feature rows for scoring and dashboard snapshots
+- `health_feature_baselines`: rolling 7/14/30/60-day personal baselines with status
+- compatibility views: `health_daily_features`, `health_metric_observations`, and `health_metric_baselines`
 - `dashboard/api/src/h59_dashboard_api/insights.py`: readiness, sleep, strain, state, recommendation, safety flags, and LLM guardrails
 
 The output must include sync context so consumers do not mistake stale bracelet data for current physiology.

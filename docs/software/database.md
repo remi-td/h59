@@ -36,6 +36,24 @@ Practical consequence:
 - `heart_rates`
 - `sport_details`
 
+## Analytics and feature-store views
+
+The raw tables remain the source of truth. Analytics are exposed through deterministic views so existing history can be replayed without contacting the device.
+
+Current compatibility views remain available:
+
+- `health_daily_features`
+- `health_metric_observations`
+- `health_metric_baselines`
+
+New feature-store views should be preferred by downstream consumers:
+
+- `health_feature_observations`: normalized long-form metric observations with source table/id, confidence, quality state, observation timestamp, and approximation label.
+- `health_daily_feature_store`: one wide row per device/date for readiness, sleep, strain, stress, oxygen, BP, and activity scoring.
+- `health_feature_baselines`: rolling 7/14/30/60-day baseline rows with sample count, mean, median, spread, latest observation timestamp, and status.
+
+Analytic surface bootstrap must validate required columns using `PRAGMA table_info` and rebuild stale SQLite view definitions automatically.
+
 ## Supporting Tables
 
 - `database_metadata`
