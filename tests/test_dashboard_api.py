@@ -427,3 +427,63 @@ def test_dashboard_api_creates_missing_health_views_when_opened_read_only(tmp_pa
     finally:
         db.close()
     assert {"health_daily_features", "health_metric_observations", "health_metric_baselines"}.issubset(views)
+
+
+def test_dashboard_api_rebuilds_stale_existing_health_views(tmp_path: Path) -> None:
+    db_path = tmp_path / "h59.sqlite"
+    _seed_db(db_path)
+    db = H59Database(db_path)
+    try:
+        from h59_client.analytics import ensure_analytic_views
+
+        ensure_analytic_views(db.connection)
+        db.connection.executescript(
+            """
+            DROP VIEW IF EXISTS analytic_sleep_sessions_canonical;
+            CREATE VIEW analytic_sleep_sessions_canonical AS
+            SELECT
+                sleep_session_id,
+                device_id,
+                sync_id,
+                start_timestamp,
+                end_timestamp,
+                total_minutes,
+                state,
+                score,
+                is_provisional,
+                source_command,
+                raw_json,
+                date(COALESCE(end_timestamp, start_timestamp)) AS sleep_day,
+                0 AS no_data_minutes,
+                'overnight' AS session_kind
+            FROM sleep_sessions;
+            """
+        )
+        db.connection.commit()
+    finally:
+        db.close()
+
+    app = create_app(
+        Settings(
+            db_path=db_path,
+            read_only=False,
+            host="127.0.0.1",
+            port=8000,
+            cors_origins=("http://localhost:5173",),
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/insights/current")
+    assert response.status_code == 200
+
+    db = H59Database(db_path)
+    try:
+        canonical_columns = {
+            row["name"] for row in db.connection.execute("PRAGMA table_info(analytic_sleep_sessions_canonical)").fetchall()
+        }
+        feature_columns = {row["name"] for row in db.connection.execute("PRAGMA table_info(health_daily_features)").fetchall()}
+    finally:
+        db.close()
+    assert "effective_minutes" in canonical_columns
+    assert "sleep_effective_minutes" in feature_columns
