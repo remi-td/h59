@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from .feature_store import CATALOG_BY_KEY, robust_z_score
+
 Confidence = Literal["low", "medium", "high"]
 State = Literal[
     "stable",
@@ -188,6 +190,7 @@ def current_insight_payload(conn: sqlite3.Connection, device_summary: Any, *, is
             "safety_flags": [],
             "recommended_action": "Keep collecting data before drawing conclusions.",
             "llm_guardrails": ["Do not diagnose from missing wearable data."],
+            "feature_context": {"observation_as_of": None, "feature_date": None, "data_quality_score": None},
         }
 
     day = str(feature["day_value"])
@@ -281,6 +284,43 @@ def current_insight_payload(conn: sqlite3.Connection, device_summary: Any, *, is
     else:
         action = "Physiology looks broadly stable; keep normal routines unless symptoms or context suggest otherwise."
 
+    components: list[dict[str, Any]] = []
+    omitted_terms: list[str] = []
+    component_specs = [
+        ("hrv.daily_median", "HRV", hrv, hrv_base, 0.35, True),
+        ("hr.resting_sleep_bpm", "Resting HR", rhr, rhr_base, 0.25, False),
+        ("sleep.total_minutes", "Sleep duration", sleep_minutes, sleep_base, 0.30, True),
+        ("strain.activity_load", "Activity load", activity_load, load_base, -0.10, False),
+    ]
+    for metric_key, label, value, baseline, weight, higher_is_better in component_specs:
+        median = _num(baseline, "median")
+        spread = None
+        if baseline is not None and baseline["max"] is not None and baseline["min"] is not None:
+            spread = max((float(baseline["max"]) - float(baseline["min"])) / 4.0, 1.0)
+        rz = robust_z_score(value, median, spread, higher_is_better=higher_is_better)
+        if value is None:
+            omitted_terms.append(f"{label} missing or unsupported for the latest feature day.")
+            continue
+        contribution = (rz or 0.0) * abs(weight) * 10.0
+        direction = "positive" if contribution >= 0 else "negative"
+        metric = CATALOG_BY_KEY.get(metric_key)
+        components.append(
+            {
+                "metric_key": metric_key,
+                "label": metric.label if metric else label,
+                "value": value,
+                "baseline": median,
+                "delta": None if median is None else value - median,
+                "robust_z": rz,
+                "weight": abs(weight),
+                "contribution": round(contribution, 3),
+                "direction": direction,
+                "confidence": 0.7 if baseline is not None else 0.45,
+            }
+        )
+    drivers_positive = sorted((c for c in components if c["contribution"] >= 0), key=lambda c: c["contribution"], reverse=True)[:3]
+    drivers_negative = sorted((c for c in components if c["contribution"] < 0), key=lambda c: c["contribution"])[:3]
+
     return {
         "as_of": feature["observation_as_of"],
         "device": {
@@ -296,7 +336,16 @@ def current_insight_payload(conn: sqlite3.Connection, device_summary: Any, *, is
         "sync_context": sync_context,
         "confidence": confidence,
         "state": state,
-        "readiness": {"score": readiness, "band": _readiness_band(readiness)},
+        "readiness": {
+            "score": readiness,
+            "score_0_100": readiness,
+            "band": _readiness_band(readiness),
+            "label": "measurement_uncertain" if confidence == "low" else ("primed" if readiness >= 85 else "balanced" if readiness >= 70 else "strained" if readiness >= 50 else "run_down"),
+            "components": components,
+            "drivers_positive": drivers_positive,
+            "drivers_negative": drivers_negative,
+            "omitted_terms": omitted_terms,
+        },
         "sleep": {"score": sleep_score, "duration_minutes": int(sleep_minutes) if sleep_minutes is not None else None, "debt_minutes_7d": None},
         "strain": {"score": strain_score, "band": _strain_band(strain_score)},
         "key_factors": key_factors,
@@ -308,4 +357,9 @@ def current_insight_payload(conn: sqlite3.Connection, device_summary: Any, *, is
             "Treat wearable BP and SpO2 as trend/safety signals requiring confirmation when abnormal.",
             "Always check sync_context.latest_band_sync and sync_context.data_freshness before treating this as current physiology.",
         ],
+        "feature_context": {
+            "observation_as_of": feature["observation_as_of"],
+            "feature_date": day,
+            "data_quality_score": feature["data_quality_score"],
+        },
     }

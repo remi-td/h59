@@ -157,9 +157,28 @@ class DebugResponse(BaseModel):
     time_context: TimeContext
 
 
+class InsightDriver(BaseModel):
+    metric_key: str
+    label: str
+    value: float | None = None
+    baseline: float | None = None
+    delta: float | None = None
+    robust_z: float | None = None
+    weight: float | None = None
+    contribution: float | None = None
+    direction: str | None = None
+    confidence: float | None = None
+
+
 class InsightScore(BaseModel):
-    score: float
-    band: str
+    score: float | None = None
+    score_0_100: float | None = None
+    band: str | None = None
+    label: str | None = None
+    components: list[InsightDriver] = Field(default_factory=list)
+    drivers_positive: list[InsightDriver] = Field(default_factory=list)
+    drivers_negative: list[InsightDriver] = Field(default_factory=list)
+    omitted_terms: list[str] = Field(default_factory=list)
 
 
 class InsightSleep(BaseModel):
@@ -181,3 +200,4 @@ class CurrentInsightResponse(BaseModel):
     safety_flags: list[str]
     recommended_action: str
     llm_guardrails: list[str]
+    feature_context: dict[str, str | int | float | None] = Field(default_factory=dict)
