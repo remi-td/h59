@@ -37,6 +37,25 @@ REQUIRED_ANALYTIC_VIEWS = {
     "health_metric_baselines",
 }
 
+# View names alone are not enough: analytic view definitions evolve over time,
+# and existing SQLite DBs keep the old CREATE VIEW SQL until we explicitly rebuild
+# them.  Validate the columns consumed by the dashboard before deciding that the
+# analytic surface is current.
+REQUIRED_ANALYTIC_VIEW_COLUMNS = {
+    "analytic_sleep_sessions_canonical": {"effective_minutes"},
+    "health_daily_features": {"observation_as_of", "sleep_effective_minutes", "systolic_bp_latest", "diastolic_bp_latest"},
+}
+
+
+def _analytic_surface_is_current(conn: sqlite3.Connection, existing: set[str]) -> bool:
+    if not REQUIRED_ANALYTIC_VIEWS.issubset(existing):
+        return False
+    for view_name, required_columns in REQUIRED_ANALYTIC_VIEW_COLUMNS.items():
+        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({view_name})").fetchall()}
+        if not required_columns.issubset(columns):
+            return False
+    return True
+
 
 def ensure_analytic_surface(conn: sqlite3.Connection) -> None:
     existing = {
@@ -49,7 +68,7 @@ def ensure_analytic_surface(conn: sqlite3.Connection) -> None:
             """
         ).fetchall()
     }
-    if REQUIRED_ANALYTIC_VIEWS.issubset(existing):
+    if _analytic_surface_is_current(conn, existing):
         return
     try:
         ensure_analytic_views(conn)
