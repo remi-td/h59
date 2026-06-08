@@ -13,6 +13,9 @@ from typing import Any
 
 
 ANALYTIC_VIEWS_SQL = """
+DROP VIEW IF EXISTS health_metric_baselines;
+DROP VIEW IF EXISTS health_metric_observations;
+DROP VIEW IF EXISTS health_daily_features;
 DROP VIEW IF EXISTS analytic_heart_rate_intervals;
 DROP VIEW IF EXISTS analytic_activity_intervals;
 DROP VIEW IF EXISTS analytic_sleep_stage_intervals;
@@ -293,6 +296,187 @@ SELECT
     COUNT(*) AS session_count
 FROM analytic_sleep_sessions_canonical
 GROUP BY device_id, sleep_day;
+
+CREATE VIEW IF NOT EXISTS health_daily_features AS
+WITH all_days AS (
+    SELECT device_id, date(valid_from) AS day_value FROM analytic_heart_rate_intervals
+    UNION
+    SELECT device_id, date(valid_from) AS day_value FROM analytic_hrv_intervals
+    UNION
+    SELECT device_id, date(valid_from) AS day_value FROM analytic_pressure_intervals
+    UNION
+    SELECT device_id, date(valid_from) AS day_value FROM analytic_blood_oxygen_intervals
+    UNION
+    SELECT device_id, date(valid_from) AS day_value FROM analytic_blood_pressure_intervals
+    UNION
+    SELECT device_id, day_value FROM analytic_daily_steps
+    UNION
+    SELECT device_id, sleep_day AS day_value FROM analytic_daily_sleep
+), hr AS (
+    SELECT device_id, date(valid_from) AS day_value, AVG(value) AS avg_hr, MIN(value) AS min_hr, MAX(value) AS max_hr, COUNT(*) AS hr_sample_count
+    FROM analytic_heart_rate_intervals
+    GROUP BY device_id, date(valid_from)
+), hrv AS (
+    SELECT device_id, date(valid_from) AS day_value, AVG(value) AS hrv_avg, MIN(value) AS hrv_min, MAX(value) AS hrv_max, COUNT(*) AS hrv_sample_count
+    FROM analytic_hrv_intervals
+    GROUP BY device_id, date(valid_from)
+), pressure AS (
+    SELECT device_id, date(valid_from) AS day_value, AVG(value) AS pressure_avg, MAX(value) AS pressure_max, COUNT(*) AS pressure_sample_count
+    FROM analytic_pressure_intervals
+    GROUP BY device_id, date(valid_from)
+), spo2 AS (
+    SELECT device_id, date(valid_from) AS day_value, AVG(value) AS spo2_avg, MIN(min_percent) AS spo2_min, SUM(CASE WHEN min_percent < 90 THEN interval_minutes ELSE 0 END) AS minutes_spo2_below_90, COUNT(*) AS spo2_sample_count
+    FROM analytic_blood_oxygen_intervals
+    GROUP BY device_id, date(valid_from)
+), sleep_stages AS (
+    SELECT device_id, date(valid_to) AS day_value,
+           SUM(CASE WHEN stage = 'deep' THEN minutes ELSE 0 END) AS deep_minutes,
+           SUM(CASE WHEN stage = 'rem' THEN minutes ELSE 0 END) AS rem_minutes,
+           SUM(CASE WHEN stage = 'light' THEN minutes ELSE 0 END) AS light_minutes,
+           SUM(CASE WHEN stage IN ('awake', 'wake') THEN minutes ELSE 0 END) AS awake_minutes,
+           SUM(CASE WHEN stage = 'no-data' THEN minutes ELSE 0 END) AS no_data_minutes
+    FROM analytic_sleep_stage_intervals
+    GROUP BY device_id, date(valid_to)
+), bp AS (
+    SELECT device_id, date(valid_from) AS day_value, systolic AS systolic_bp_latest, diastolic AS diastolic_bp_latest, mean_arterial_pressure
+    FROM analytic_blood_pressure_intervals AS bpi
+    WHERE valid_from = (
+        SELECT MAX(valid_from)
+        FROM analytic_blood_pressure_intervals AS newer
+        WHERE newer.device_id = bpi.device_id AND date(newer.valid_from) = date(bpi.valid_from)
+    )
+), obs_values AS (
+    SELECT device_id, date(valid_from) AS day_value, valid_to AS observed_at FROM analytic_heart_rate_intervals
+    UNION ALL SELECT device_id, date(valid_from) AS day_value, valid_to FROM analytic_activity_intervals
+    UNION ALL SELECT device_id, date(valid_from) AS day_value, valid_to FROM analytic_hrv_intervals
+    UNION ALL SELECT device_id, date(valid_from) AS day_value, valid_to FROM analytic_pressure_intervals
+    UNION ALL SELECT device_id, date(valid_from) AS day_value, valid_to FROM analytic_blood_oxygen_intervals
+    UNION ALL SELECT device_id, date(valid_from) AS day_value, valid_to FROM analytic_blood_pressure_intervals
+    UNION ALL SELECT device_id, sleep_day AS day_value, end_timestamp FROM analytic_sleep_sessions_canonical
+), obs AS (
+    SELECT device_id, day_value, MAX(observed_at) AS observation_as_of
+    FROM obs_values
+    WHERE observed_at IS NOT NULL
+    GROUP BY device_id, day_value
+)
+SELECT
+    d.device_id,
+    d.day_value,
+    strftime('%Y-%m-%dT00:00:00+00:00', d.day_value) AS valid_from,
+    strftime('%Y-%m-%dT00:00:00+00:00', unixepoch(d.day_value || 'T00:00:00+00:00') + (24 * 60 * 60), 'unixepoch') AS valid_to,
+    obs.observation_as_of,
+    ROUND(
+        (CASE WHEN hr.hr_sample_count IS NOT NULL THEN 20 ELSE 0 END) +
+        (CASE WHEN hrv.hrv_sample_count IS NOT NULL THEN 15 ELSE 0 END) +
+        (CASE WHEN s.steps_total IS NOT NULL THEN 15 ELSE 0 END) +
+        (CASE WHEN ds.minutes_total IS NOT NULL THEN 25 ELSE 0 END) +
+        (CASE WHEN spo2.spo2_sample_count IS NOT NULL THEN 10 ELSE 0 END) +
+        (CASE WHEN pressure.pressure_sample_count IS NOT NULL THEN 10 ELSE 0 END) +
+        (CASE WHEN bp.systolic_bp_latest IS NOT NULL THEN 5 ELSE 0 END),
+        1
+    ) AS data_quality_score,
+    hr.hr_sample_count,
+    hrv.hrv_sample_count,
+    pressure.pressure_sample_count,
+    spo2.spo2_sample_count,
+    ds.minutes_total AS sleep_total_minutes,
+    c.effective_minutes AS sleep_effective_minutes,
+    c.start_timestamp AS sleep_start,
+    c.end_timestamp AS sleep_end,
+    CAST((unixepoch(c.start_timestamp) + ((unixepoch(c.end_timestamp) - unixepoch(c.start_timestamp)) / 2)) AS INTEGER) AS sleep_midpoint_epoch,
+    ss.deep_minutes,
+    ss.rem_minutes,
+    ss.light_minutes,
+    ss.awake_minutes,
+    ss.no_data_minutes,
+    hr.avg_hr,
+    hr.min_hr,
+    hr.max_hr,
+    hr.min_hr AS resting_hr_bpm,
+    hrv.hrv_avg,
+    hrv.hrv_min,
+    hrv.hrv_max,
+    spo2.spo2_avg,
+    spo2.spo2_min,
+    spo2.minutes_spo2_below_90,
+    pressure.pressure_avg,
+    pressure.pressure_max,
+    s.steps_total,
+    s.distance_total,
+    s.calories_total,
+    ROUND((COALESCE(s.steps_total, 0) / 1000.0) + (COALESCE(s.calories_total, 0) / 100000.0), 2) AS activity_load,
+    bp.systolic_bp_latest,
+    bp.diastolic_bp_latest,
+    bp.mean_arterial_pressure
+FROM all_days AS d
+LEFT JOIN hr ON hr.device_id = d.device_id AND hr.day_value = d.day_value
+LEFT JOIN hrv ON hrv.device_id = d.device_id AND hrv.day_value = d.day_value
+LEFT JOIN pressure ON pressure.device_id = d.device_id AND pressure.day_value = d.day_value
+LEFT JOIN spo2 ON spo2.device_id = d.device_id AND spo2.day_value = d.day_value
+LEFT JOIN analytic_daily_steps AS s ON s.device_id = d.device_id AND s.day_value = d.day_value
+LEFT JOIN analytic_daily_sleep AS ds ON ds.device_id = d.device_id AND ds.sleep_day = d.day_value
+LEFT JOIN analytic_sleep_sessions_canonical AS c ON c.device_id = d.device_id AND c.sleep_day = d.day_value
+LEFT JOIN sleep_stages AS ss ON ss.device_id = d.device_id AND ss.day_value = d.day_value
+LEFT JOIN bp ON bp.device_id = d.device_id AND bp.day_value = d.day_value
+LEFT JOIN obs ON obs.device_id = d.device_id AND obs.day_value = d.day_value;
+
+CREATE VIEW IF NOT EXISTS health_metric_observations AS
+SELECT device_id, day_value, 'resting_hr_bpm' AS metric, resting_hr_bpm AS value FROM health_daily_features WHERE resting_hr_bpm IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'avg_hr', avg_hr FROM health_daily_features WHERE avg_hr IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'hrv_avg', hrv_avg FROM health_daily_features WHERE hrv_avg IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'sleep_total_minutes', sleep_total_minutes FROM health_daily_features WHERE sleep_total_minutes IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'steps_total', steps_total FROM health_daily_features WHERE steps_total IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'activity_load', activity_load FROM health_daily_features WHERE activity_load IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'pressure_avg', pressure_avg FROM health_daily_features WHERE pressure_avg IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'spo2_avg', spo2_avg FROM health_daily_features WHERE spo2_avg IS NOT NULL
+UNION ALL SELECT device_id, day_value, 'spo2_min', spo2_min FROM health_daily_features WHERE spo2_min IS NOT NULL;
+
+CREATE VIEW IF NOT EXISTS health_metric_baselines AS
+WITH windows(window_days) AS (VALUES (7), (14), (30), (60)),
+baseline_values AS (
+    SELECT
+        cur.device_id,
+        cur.metric,
+        cur.day_value AS as_of_day,
+        windows.window_days,
+        hist.value
+    FROM health_metric_observations AS cur
+    CROSS JOIN windows
+    JOIN health_metric_observations AS hist
+      ON hist.device_id = cur.device_id
+     AND hist.metric = cur.metric
+     AND hist.day_value >= date(cur.day_value, '-' || (windows.window_days - 1) || ' days')
+     AND hist.day_value <= cur.day_value
+), numbered AS (
+    SELECT
+        device_id,
+        metric,
+        as_of_day,
+        window_days,
+        value,
+        ROW_NUMBER() OVER (PARTITION BY device_id, metric, as_of_day, window_days ORDER BY value) AS rn,
+        COUNT(*) OVER (PARTITION BY device_id, metric, as_of_day, window_days) AS cnt
+    FROM baseline_values
+)
+SELECT
+    device_id,
+    metric,
+    as_of_day,
+    window_days,
+    COUNT(*) AS n_days,
+    ROUND(AVG(value), 3) AS mean,
+    MIN(value) AS min,
+    MAX(value) AS max,
+    ROUND(AVG(CASE WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN value END), 3) AS median,
+    ROUND(AVG(CASE WHEN rn IN (MAX(1, CAST((cnt * 0.2) AS INTEGER)), MAX(1, CAST((cnt * 0.8) AS INTEGER))) THEN value END), 3) AS band_sample,
+    CASE
+        WHEN COUNT(*) >= 45 THEN 'high'
+        WHEN COUNT(*) >= 30 THEN 'medium'
+        WHEN COUNT(*) >= 14 THEN 'low'
+        ELSE 'new'
+    END AS quality
+FROM numbered
+GROUP BY device_id, metric, as_of_day, window_days;
 """
 
 

@@ -20,6 +20,42 @@ export interface DeviceSummary {
   is_preferred: boolean;
 }
 
+export interface SyncContext {
+  latest_band_sync?: string | null;
+  sync_age_minutes?: number | null;
+  data_freshness: FreshnessClass;
+  is_stale: boolean;
+  data_as_of?: string | null;
+  data_age_minutes?: number | null;
+  warning?: string | null;
+}
+
+export interface InsightScore {
+  score: number;
+  band: string;
+}
+
+export interface InsightSleep {
+  score: number;
+  duration_minutes?: number | null;
+  debt_minutes_7d?: number | null;
+}
+
+export interface CurrentInsightResponse {
+  as_of?: string | null;
+  device?: DeviceSummary | null;
+  sync_context: SyncContext;
+  confidence: "low" | "medium" | "high";
+  state: string;
+  readiness: InsightScore;
+  sleep: InsightSleep;
+  strain: InsightScore;
+  key_factors: string[];
+  safety_flags: string[];
+  recommended_action: string;
+  llm_guardrails: string[];
+}
+
 export interface MetricSummary {
   min?: number | null;
   max?: number | null;

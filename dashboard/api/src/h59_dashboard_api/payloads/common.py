@@ -32,6 +32,9 @@ REQUIRED_ANALYTIC_VIEWS = {
     "analytic_hrv_intervals",
     "analytic_daily_steps",
     "analytic_daily_sleep",
+    "health_daily_features",
+    "health_metric_observations",
+    "health_metric_baselines",
 }
 
 
@@ -42,13 +45,25 @@ def ensure_analytic_surface(conn: sqlite3.Connection) -> None:
             """
             SELECT name
             FROM sqlite_master
-            WHERE type='view' AND name LIKE 'analytic_%'
+            WHERE type='view'
             """
         ).fetchall()
     }
     if REQUIRED_ANALYTIC_VIEWS.issubset(existing):
         return
-    ensure_analytic_views(conn)
+    try:
+        ensure_analytic_views(conn)
+    except sqlite3.OperationalError as exc:
+        if "readonly" not in str(exc).lower() and "read-only" not in str(exc).lower():
+            raise
+        db_row = conn.execute("PRAGMA database_list").fetchone()
+        db_path = db_row["file"] if db_row is not None else None
+        if not db_path:
+            raise
+        with sqlite3.connect(str(db_path)) as writable_conn:
+            writable_conn.row_factory = sqlite3.Row
+            ensure_analytic_views(writable_conn)
+            writable_conn.commit()
 
 
 def fmt_minutes(minutes: int | None) -> str | None:

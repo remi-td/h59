@@ -28,6 +28,16 @@ class DeviceSummary(BaseModel):
     is_preferred: bool = False
 
 
+class SyncContext(BaseModel):
+    latest_band_sync: str | None = None
+    sync_age_minutes: int | None = None
+    data_freshness: FreshnessClass
+    is_stale: bool
+    data_as_of: str | None = None
+    data_age_minutes: int | None = None
+    warning: str | None = None
+
+
 class MetricSummary(BaseModel):
     min: float | None = None
     max: float | None = None
@@ -145,3 +155,29 @@ class DebugResponse(BaseModel):
     table_counts: dict[str, int]
     recent_syncs: list[dict[str, str | int | None]]
     time_context: TimeContext
+
+
+class InsightScore(BaseModel):
+    score: float
+    band: str
+
+
+class InsightSleep(BaseModel):
+    score: float
+    duration_minutes: int | None = None
+    debt_minutes_7d: int | None = None
+
+
+class CurrentInsightResponse(BaseModel):
+    as_of: str | None = None
+    device: DeviceSummary | None = None
+    sync_context: SyncContext
+    confidence: Literal["low", "medium", "high"]
+    state: str
+    readiness: InsightScore
+    sleep: InsightSleep
+    strain: InsightScore
+    key_factors: list[str]
+    safety_flags: list[str]
+    recommended_action: str
+    llm_guardrails: list[str]
