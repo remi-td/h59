@@ -3,14 +3,18 @@ from datetime import UTC, datetime
 import os
 import time
 
+import pytest
+
 from h59_client.devices import DeviceTarget
-from h59_client.protocol import RealTimeSample
+from h59_client.protocol import HealthCheckSample, NoData, RealTimeSample
 from h59_client.sync import (
     INITIAL_BACKFILL_MAX_DAYS,
-    determine_initial_backfill_dates,
     determine_history_selector,
+    determine_initial_backfill_dates,
     determine_sync_dates,
     realtime_h59,
+    sync_h59,
+    sync_one_h59,
 )
 
 
@@ -280,3 +284,183 @@ def test_realtime_h59_spo2_runs_as_one_shot(monkeypatch, tmp_path):
     assert captured["hard_timeout"] == 40.0
     assert captured["stop_on_idle"] is True
     assert captured["should_stop"] is None
+
+
+class FakeServices:
+    def get_service(self, _uuid):
+        return None
+
+
+class FakeClient:
+    def __init__(self):
+        self.services = FakeServices()
+        self.disconnected = False
+
+    async def disconnect(self):
+        self.disconnected = True
+
+
+class FakeTransport:
+    def __init__(self, client, packet_callback=None):
+        self.client = client
+        self.packet_callback = packet_callback
+        self.started = False
+        self.stopped = False
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+
+class FakeDatabase:
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.realtime_observations = []
+        self.finished_sync = None
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def upsert_device(self, **_kwargs):
+        return 1
+
+    def get_latest_sync_timestamp(self, _device_id):
+        return None
+
+    def create_sync(self, _device_id, **_kwargs):
+        return 7
+
+    def has_gatt_snapshot(self, _device_id):
+        return True
+
+    def record_battery(self, *args, **kwargs):
+        return None
+
+    def record_heart_rate_settings(self, *args, **kwargs):
+        return None
+
+    def record_capabilities(self, *args, **kwargs):
+        return None
+
+    def record_raw_packet(self, *args, **kwargs):
+        return None
+
+    def record_sleep_sessions(self, *args, **kwargs):
+        return None
+
+    def record_blood_oxygen_history(self, *args, **kwargs):
+        return None
+
+    def record_pressure_history(self, *args, **kwargs):
+        return None
+
+    def record_hrv_history(self, *args, **kwargs):
+        return None
+
+    def record_heart_rate_day(self, *args, **kwargs):
+        return None
+
+    def record_activity_blocks(self, *args, **kwargs):
+        return None
+
+    def record_realtime_observations(self, device_id, sync_id, observations):
+        self.realtime_observations.append((device_id, sync_id, observations))
+
+    def finish_sync(self, sync_id, finished_at):
+        self.finished_sync = (sync_id, finished_at)
+
+
+def test_sync_one_h59_runs_post_sync_health_check_once_and_persists_observations(monkeypatch):
+    client = FakeClient()
+    target = DeviceTarget(address="AA:BB:CC:DD:EE:FF", name="H59", advertisement=None, nickname="remi")
+    fake_db = FakeDatabase("data/h59.sqlite")
+    battery = object()
+    hr_settings = object()
+    capabilities = object()
+    hc_sample = HealthCheckSample(diastolic=81, systolic=122, heart_rate=67, cuff_pressure_tenths=1012, error_code=0)
+
+    monkeypatch.setattr("h59_client.sync.H59Database", lambda db_path: fake_db)
+
+    async def fake_connect_target(target, timeout=20.0):
+        return client
+
+    async def fake_read_device_versions(client):
+        return ("1.0", "2.0")
+
+    async def fake_query_battery(transport):
+        return (battery, "aa", "2026-05-26T15:00:00+00:00")
+
+    async def fake_query_hr_settings(transport):
+        return (hr_settings, "bb", "2026-05-26T15:00:00+00:00")
+
+    async def fake_query_capabilities(transport, device_clock_mode):
+        return (capabilities, "cc", "2026-05-26T15:00:00+00:00")
+
+    async def fake_query_health_check(transport, **_kwargs):
+        return ([(hc_sample, "deadbeef", "2026-05-26T15:00:01+00:00")], (hc_sample, "deadbeef", "2026-05-26T15:00:01+00:00"))
+
+    monkeypatch.setattr("h59_client.sync.connect_target", fake_connect_target)
+    monkeypatch.setattr("h59_client.sync.read_device_versions", fake_read_device_versions)
+    monkeypatch.setattr("h59_client.sync.PacketTransport", FakeTransport)
+    monkeypatch.setattr("h59_client.sync.date_utils.utc_now", lambda: datetime(2026, 5, 26, 15, 0, tzinfo=UTC))
+    monkeypatch.setattr("h59_client.sync.determine_sync_dates", lambda **kwargs: [])
+    monkeypatch.setattr("h59_client.sync._query_battery", fake_query_battery)
+    monkeypatch.setattr("h59_client.sync._query_hr_settings", fake_query_hr_settings)
+    monkeypatch.setattr("h59_client.sync._query_capabilities", fake_query_capabilities)
+    monkeypatch.setattr("h59_client.sync._query_health_check", fake_query_health_check)
+
+    health_calls = []
+
+    def fake_health_check_observations(samples, final_reading):
+        health_calls.append((samples, final_reading))
+        return (["obs-1", "obs-2"], {"diastolic": 81, "systolic": 122, "heart_rate": 67})
+
+    monkeypatch.setattr("h59_client.sync._health_check_observations", fake_health_check_observations)
+
+    result = asyncio.run(
+        sync_one_h59(
+            db_path="data/h59.sqlite",
+            target=target,
+            post_sync_health_check=True,
+            realtime_metrics=["health-check"],
+        )
+    )
+
+    assert len(health_calls) == 1
+    assert result["realtime_results"]["health-check"]["diastolic"] == 81
+    assert fake_db.realtime_observations == [(1, 7, ["obs-1", "obs-2"])]
+    assert fake_db.finished_sync is not None
+    assert fake_db.finished_sync[0] == 7
+    assert client.disconnected is True
+
+
+def test_sync_h59_forwards_post_sync_health_check_to_sync_one(monkeypatch):
+    captured = {}
+
+    async def fake_sync_one_h59(**kwargs):
+        captured.update(kwargs)
+        return [{"sync_id": 11}]
+
+    target = DeviceTarget(address="AA:BB:CC:DD:EE:FF", name="H59", advertisement=None, nickname="remi")
+
+    async def fake_resolve_single_target(**kwargs):
+        return target
+
+    monkeypatch.setattr("h59_client.sync.resolve_single_target", fake_resolve_single_target)
+    monkeypatch.setattr("h59_client.sync.sync_one_h59", fake_sync_one_h59)
+
+    result = asyncio.run(
+        sync_h59(
+            db_path="data/h59.sqlite",
+            selector="remi",
+            post_sync_health_check=True,
+            realtime_metrics=["health-check"],
+        )
+    )
+
+    assert result == [[{"sync_id": 11}]]
+    assert captured["post_sync_health_check"] is True
+    assert captured["realtime_metrics"] == ["health-check"]

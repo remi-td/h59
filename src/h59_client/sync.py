@@ -347,6 +347,32 @@ def _health_check_observations(
     return observations, {"packets": len(samples), "final_result": result_summary}
 
 
+async def _run_and_record_health_check(
+    *,
+    transport: PacketTransport,
+    database: H59Database,
+    device_id: int,
+    sync_id: int,
+    hard_timeout: float | None = 40.0,
+    stop_on_idle: bool = True,
+    should_stop: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    samples, final_reading = await _query_health_check(
+        transport,
+        hard_timeout=hard_timeout,
+        stop_on_idle=stop_on_idle,
+        should_stop=should_stop,
+    )
+    observations, result = _health_check_observations(samples, final_reading)
+    if observations:
+        database.record_realtime_observations(
+            device_id,
+            sync_id,
+            observations=observations,
+        )
+    return result
+
+
 def determine_sync_dates(
     *,
     now: datetime,
@@ -380,6 +406,7 @@ async def sync_one_h59(
     incremental: bool = False,
     device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
+    post_sync_health_check: bool = False,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
     realtime_duration_seconds: int | None = None,
@@ -579,22 +606,29 @@ async def sync_one_h59(
                             if empty_history_streak >= INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS:
                                 break
 
+                if post_sync_health_check:
+                    realtime_results["health-check"] = await _run_and_record_health_check(
+                        transport=transport,
+                        database=database,
+                        device_id=device_id,
+                        sync_id=sync_id,
+                    )
+
+                if post_sync_health_check and realtime_metrics:
+                    realtime_metrics = [metric for metric in realtime_metrics if metric != "health-check"]
+
                 if realtime_metrics:
                     for metric_name in realtime_metrics:
                         if metric_name == "health-check":
-                            samples, final_reading = await _query_health_check(
-                                transport,
-                                hard_timeout=40.0,
-                                stop_on_idle=True,
-                                should_stop=None,
+                            realtime_results["health-check"] = await _run_and_record_health_check(
+                                transport=transport,
+                                database=database,
+                                device_id=device_id,
+                                sync_id=sync_id,
+                                hard_timeout=None if realtime_should_stop is not None and realtime_duration_seconds is None else float(realtime_duration_seconds) if realtime_duration_seconds is not None else 40.0,
+                                stop_on_idle=not (realtime_should_stop is not None or realtime_duration_seconds is not None),
+                                should_stop=realtime_should_stop,
                             )
-                            observations, realtime_results["health-check"] = _health_check_observations(samples, final_reading)
-                            if observations:
-                                database.record_realtime_observations(
-                                    device_id,
-                                    sync_id,
-                                    observations=observations,
-                                )
                             continue
                         if metric_name == "spo2":
                             samples = await _query_realtime_controlled(
@@ -670,6 +704,7 @@ async def sync_h59(
     incremental: bool = False,
     device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
+    post_sync_health_check: bool = False,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
     realtime_duration_seconds: int | None = None,
@@ -689,6 +724,7 @@ async def sync_h59(
                 incremental=incremental,
                 device_clock_mode=device_clock_mode,
                 capture_gatt=capture_gatt,
+                post_sync_health_check=post_sync_health_check,
                 realtime_metrics=realtime_metrics,
                 realtime_samples=realtime_samples,
                 realtime_duration_seconds=realtime_duration_seconds,
@@ -708,6 +744,7 @@ async def sync_h59(
             incremental=incremental,
             device_clock_mode=device_clock_mode,
             capture_gatt=capture_gatt,
+            post_sync_health_check=post_sync_health_check,
             realtime_metrics=realtime_metrics,
             realtime_samples=realtime_samples,
             realtime_duration_seconds=realtime_duration_seconds,

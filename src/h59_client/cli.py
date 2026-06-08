@@ -311,6 +311,8 @@ def build_sync_child_command(args: argparse.Namespace) -> list[str]:
         cmd.extend(["--config", args.config])
     if args.capture_gatt:
         cmd.append("--capture-gatt")
+    if getattr(args, "post_sync_health_check", False):
+        cmd.append("--post-sync-health-check")
     if args.state_dir:
         cmd.extend(["--state-dir", args.state_dir])
     if args.pid_file:
@@ -353,6 +355,7 @@ def spawn_daemon(args: argparse.Namespace) -> int:
             "selector": args.selector,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
+            "post_sync_health_check": bool(getattr(args, "post_sync_health_check", False)),
             "log_file": str(log_file),
             "pid_file": str(pid_file),
             "state_dir": str(state_dir),
@@ -512,6 +515,27 @@ def filter_realtime_metrics_for_capabilities(
     return supported, unsupported
 
 
+def summarize_cycle_realtime_results(results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Return compact realtime metadata for daemon status/logging."""
+    summaries: list[dict[str, Any]] = []
+    latest_health_check: dict[str, Any] | None = None
+    for result in results:
+        realtime_results = result.get("realtime_results") or {}
+        if not realtime_results:
+            continue
+        summary = {
+            "sync_id": result.get("sync_id"),
+            "address": result.get("address"),
+            "realtime_results": realtime_results,
+        }
+        summaries.append(summary)
+        health_check = realtime_results.get("health-check")
+        if health_check is not None:
+            final_result = health_check.get("final_result")
+            latest_health_check = final_result or {"packets": health_check.get("packets", 0), "final_result": None}
+    return summaries, latest_health_check
+
+
 def run_foreground_sync(args: argparse.Namespace) -> int:
     device_clock_mode = resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config)
     realtime_should_stop = None
@@ -531,6 +555,7 @@ def run_foreground_sync(args: argparse.Namespace) -> int:
             incremental=args.incremental,
             device_clock_mode=device_clock_mode,
             capture_gatt=args.capture_gatt,
+            post_sync_health_check=args.post_sync_health_check,
             realtime_metrics=args.realtime,
             realtime_samples=args.realtime_samples,
             realtime_duration_seconds=args.realtime_duration,
@@ -567,6 +592,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
             "selector": args.selector,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
+            "post_sync_health_check": bool(getattr(args, "post_sync_health_check", False)),
             "log_file": str(log_file),
             "pid_file": str(pid_file),
             "state_dir": str(state_dir),
@@ -577,12 +603,13 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
     )
 
     logger.info(
-        "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss device_clock=%s",
+        "starting h59 daemon loop db=%s selector=%s incremental=%s period=%ss device_clock=%s post_sync_health_check=%s",
         args.db,
         args.selector,
         args.incremental,
         args.period_seconds,
         resolve_device_clock_mode(cli_value=args.device_clock, config_path=args.config),
+        bool(getattr(args, "post_sync_health_check", False)),
     )
 
     while not stop_requested:
@@ -606,30 +633,33 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     incremental=args.incremental,
                     device_clock_mode=device_clock_mode,
                     capture_gatt=args.capture_gatt,
+                    post_sync_health_check=args.post_sync_health_check,
                     realtime_metrics=args.realtime,
                     realtime_samples=args.realtime_samples,
                     realtime_duration_seconds=args.realtime_duration,
                 )
             )
             logger.info("sync successful devices=%s", len(results))
+            realtime_summaries, last_health_check = summarize_cycle_realtime_results(results)
             for result in results:
                 logger.info(
-                    "sync successful device=%s sync_id=%s incremental=%s queried_days=%s captured_gatt=%s",
+                    "sync successful device=%s sync_id=%s incremental=%s queried_days=%s captured_gatt=%s realtime_results=%s",
                     result["address"],
                     result["sync_id"],
                     result["incremental"],
                     result["queried_days"],
                     result["captured_gatt"],
+                    json.dumps(result.get("realtime_results") or {}, sort_keys=True),
                 )
-            update_metadata(
-                meta_file,
-                {
-                    "last_activity_at": _utc_now_iso(),
-                    "last_cycle_finished_at": _utc_now_iso(),
-                    "last_cycle_state": "idle",
-                    "last_cycle_result": f"ok:{len(results)}",
-                },
-            )
+            metadata_update = {
+                "last_activity_at": _utc_now_iso(),
+                "last_cycle_finished_at": _utc_now_iso(),
+                "last_cycle_state": "idle",
+                "last_cycle_result": f"ok:{len(results)}",
+                "last_cycle_realtime_results": realtime_summaries,
+                "last_cycle_health_check": last_health_check,
+            }
+            update_metadata(meta_file, metadata_update)
         except Exception as exc:
             notice = format_daemon_operational_notice(exc)
             if notice is not None:
@@ -1015,6 +1045,8 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
             print(f"incremental: {metadata['incremental']}")
         if "period_seconds" in metadata:
             print(f"period_seconds: {metadata['period_seconds']}")
+        if "post_sync_health_check" in metadata:
+            print(f"post_sync_health_check: {metadata['post_sync_health_check']}")
         if "last_cycle_state" in metadata:
             print(f"last_cycle_state: {metadata['last_cycle_state']}")
         if "last_activity_at" in metadata:
@@ -1025,6 +1057,16 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
             print(f"last_cycle_finished_at: {metadata['last_cycle_finished_at']}")
         if "next_cycle_due_at_iso" in metadata:
             print(f"next_cycle_due_at: {metadata['next_cycle_due_at_iso']}")
+        if "last_cycle_health_check" in metadata and metadata["last_cycle_health_check"]:
+            health_check = metadata["last_cycle_health_check"]
+            if health_check.get("final_result") is None and "packets" in health_check:
+                print(f"last_cycle_health_check: packets={health_check.get('packets', 0)} final_result=None")
+            else:
+                print(
+                    "last_cycle_health_check: {systolic}/{diastolic} mmHg, HR {heart_rate} bpm at {timestamp}".format(
+                        **health_check
+                    )
+                )
         if "last_cycle_result" in metadata:
             print(f"last_cycle_result: {metadata['last_cycle_result']}")
     if stale:
@@ -1162,6 +1204,11 @@ def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
     parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
     parser.add_argument("--capture-gatt", action="store_true", help="force a full GATT inventory capture during sync")
+    parser.add_argument(
+        "--post-sync-health-check",
+        action="store_true",
+        help="run a realtime health-check after the history sync completes",
+    )
     parser.add_argument("--realtime", nargs="*", default=[], choices=sorted(REALTIME_METRIC_CHOICES), help=argparse.SUPPRESS)
     parser.add_argument("--realtime-samples", type=int, default=3, help=argparse.SUPPRESS)
     parser.add_argument("--realtime-duration", type=parse_duration, help=argparse.SUPPRESS)
