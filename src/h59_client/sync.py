@@ -380,6 +380,7 @@ async def sync_one_h59(
     incremental: bool = False,
     device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
+    post_sync_health_check: bool = False,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
     realtime_duration_seconds: int | None = None,
@@ -579,6 +580,19 @@ async def sync_one_h59(
                             if empty_history_streak >= INITIAL_BACKFILL_STOP_AFTER_EMPTY_DAYS:
                                 break
 
+                if post_sync_health_check:
+                    samples, final_reading = await _query_health_check(transport)
+                    observations, realtime_results["health-check"] = _health_check_observations(samples, final_reading)
+                    if observations:
+                        database.record_realtime_observations(
+                            device_id,
+                            sync_id,
+                            observations=observations,
+                        )
+
+                if post_sync_health_check and realtime_metrics:
+                    realtime_metrics = [metric for metric in realtime_metrics if metric != "health-check"]
+
                 if realtime_metrics:
                     for metric_name in realtime_metrics:
                         if metric_name == "health-check":
@@ -670,6 +684,7 @@ async def sync_h59(
     incremental: bool = False,
     device_clock_mode: str = "utc",
     capture_gatt: bool | None = None,
+    post_sync_health_check: bool = False,
     realtime_metrics: list[str] | None = None,
     realtime_samples: int = 3,
     realtime_duration_seconds: int | None = None,
@@ -689,6 +704,7 @@ async def sync_h59(
                 incremental=incremental,
                 device_clock_mode=device_clock_mode,
                 capture_gatt=capture_gatt,
+                post_sync_health_check=post_sync_health_check,
                 realtime_metrics=realtime_metrics,
                 realtime_samples=realtime_samples,
                 realtime_duration_seconds=realtime_duration_seconds,
@@ -708,6 +724,7 @@ async def sync_h59(
             incremental=incremental,
             device_clock_mode=device_clock_mode,
             capture_gatt=capture_gatt,
+            post_sync_health_check=post_sync_health_check,
             realtime_metrics=realtime_metrics,
             realtime_samples=realtime_samples,
             realtime_duration_seconds=realtime_duration_seconds,

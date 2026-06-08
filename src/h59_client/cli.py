@@ -311,6 +311,8 @@ def build_sync_child_command(args: argparse.Namespace) -> list[str]:
         cmd.extend(["--config", args.config])
     if args.capture_gatt:
         cmd.append("--capture-gatt")
+    if getattr(args, "post_sync_health_check", False):
+        cmd.append("--post-sync-health-check")
     if args.state_dir:
         cmd.extend(["--state-dir", args.state_dir])
     if args.pid_file:
@@ -353,6 +355,7 @@ def spawn_daemon(args: argparse.Namespace) -> int:
             "selector": args.selector,
             "incremental": bool(args.incremental),
             "period_seconds": args.period_seconds,
+            "post_sync_health_check": bool(getattr(args, "post_sync_health_check", False)),
             "log_file": str(log_file),
             "pid_file": str(pid_file),
             "state_dir": str(state_dir),
@@ -531,6 +534,7 @@ def run_foreground_sync(args: argparse.Namespace) -> int:
             incremental=args.incremental,
             device_clock_mode=device_clock_mode,
             capture_gatt=args.capture_gatt,
+            post_sync_health_check=args.post_sync_health_check,
             realtime_metrics=args.realtime,
             realtime_samples=args.realtime_samples,
             realtime_duration_seconds=args.realtime_duration,
@@ -606,6 +610,7 @@ def run_daemon_loop(args: argparse.Namespace) -> int:
                     incremental=args.incremental,
                     device_clock_mode=device_clock_mode,
                     capture_gatt=args.capture_gatt,
+                    post_sync_health_check=args.post_sync_health_check,
                     realtime_metrics=args.realtime,
                     realtime_samples=args.realtime_samples,
                     realtime_duration_seconds=args.realtime_duration,
@@ -1015,6 +1020,8 @@ def handle_daemon_status(args: argparse.Namespace) -> int:
             print(f"incremental: {metadata['incremental']}")
         if "period_seconds" in metadata:
             print(f"period_seconds: {metadata['period_seconds']}")
+        if "post_sync_health_check" in metadata:
+            print(f"post_sync_health_check: {metadata['post_sync_health_check']}")
         if "last_cycle_state" in metadata:
             print(f"last_cycle_state: {metadata['last_cycle_state']}")
         if "last_activity_at" in metadata:
@@ -1162,6 +1169,11 @@ def add_common_sync_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-d", "--daemonize", action="store_true", help="detach into the background and sync periodically")
     parser.add_argument("--period", default="5m", help="period for detached syncs, in seconds or with s/m/h suffixes")
     parser.add_argument("--capture-gatt", action="store_true", help="force a full GATT inventory capture during sync")
+    parser.add_argument(
+        "--post-sync-health-check",
+        action="store_true",
+        help="run a realtime health-check after the history sync completes",
+    )
     parser.add_argument("--realtime", nargs="*", default=[], choices=sorted(REALTIME_METRIC_CHOICES), help=argparse.SUPPRESS)
     parser.add_argument("--realtime-samples", type=int, default=3, help=argparse.SUPPRESS)
     parser.add_argument("--realtime-duration", type=parse_duration, help=argparse.SUPPRESS)

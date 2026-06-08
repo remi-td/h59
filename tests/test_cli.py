@@ -11,16 +11,21 @@ import pytest
 from h59_client.cli import (
     archive_db_path,
     build_parser,
+    build_sync_child_command,
     default_db_path,
     default_state_dir,
     filter_realtime_metrics_for_capabilities,
     format_daemon_operational_notice,
     format_operational_error,
     handle_daemon_stop,
+    handle_sync,
     main,
     parse_duration,
     resolve_realtime_capabilities,
     resolve_runtime_paths,
+    run_daemon_loop,
+    run_foreground_sync,
+    spawn_daemon,
 )
 from h59_client.storage import H59Database
 
@@ -66,15 +71,165 @@ def test_build_parser_supports_realtime_stdout_mode():
     assert args.metrics == ["health-check"]
 
 
-def test_build_parser_supports_config_commands():
+def test_build_parser_supports_post_sync_health_check_flag():
     parser = build_parser()
-    show_args = parser.parse_args(["config", "show"])
-    set_args = parser.parse_args(["config", "set-device-clock", "local"])
-    assert show_args.command == "config"
-    assert show_args.config_command == "show"
-    assert set_args.command == "config"
-    assert set_args.config_command == "set-device-clock"
-    assert set_args.mode == "local"
+    args = parser.parse_args(["sync", "--post-sync-health-check"])
+    assert args.command == "sync"
+    assert args.post_sync_health_check is True
+
+
+def test_build_sync_child_command_forwards_post_sync_health_check_flag():
+    args = argparse.Namespace(
+        selector="remi",
+        incremental=True,
+        db="data/h59.sqlite",
+        config=None,
+        capture_gatt=False,
+        post_sync_health_check=True,
+        state_dir=None,
+        pid_file=None,
+        log_file=None,
+        period="5m",
+        period_seconds=300,
+        scan_timeout=20.0,
+        device_clock="utc",
+        realtime=[],
+        realtime_samples=3,
+        realtime_duration=None,
+        realtime_until_keypress=False,
+    )
+    cmd = build_sync_child_command(args)
+    assert "--post-sync-health-check" in cmd
+
+
+def test_run_foreground_sync_forwards_post_sync_health_check(monkeypatch):
+    captured = {}
+
+    async def fake_sync_h59(**kwargs):
+        captured.update(kwargs)
+        return [{"device_id": 1, "sync_id": 2, "incremental": False, "queried_days": 0, "captured_gatt": False}]
+
+    monkeypatch.setattr("h59_client.cli.sync_h59", fake_sync_h59)
+    monkeypatch.setattr("h59_client.cli.print_sync_results", lambda results: None)
+    monkeypatch.setattr("h59_client.cli.resolve_device_clock_mode", lambda cli_value, config_path: "utc")
+
+    args = argparse.Namespace(
+        db="data/h59.sqlite",
+        selector="remi",
+        scan_timeout=20.0,
+        incremental=False,
+        device_clock="utc",
+        config=None,
+        capture_gatt=False,
+        post_sync_health_check=True,
+        realtime=[],
+        realtime_samples=3,
+        realtime_duration=None,
+        realtime_until_keypress=False,
+    )
+
+    assert run_foreground_sync(args) == 0
+    assert captured["post_sync_health_check"] is True
+
+
+def test_spawn_daemon_metadata_includes_post_sync_health_check(monkeypatch, tmp_path):
+    args = argparse.Namespace(
+        selector="remi",
+        incremental=False,
+        db="data/h59.sqlite",
+        config=None,
+        capture_gatt=False,
+        post_sync_health_check=True,
+        state_dir=str(tmp_path / "state"),
+        pid_file=None,
+        log_file=None,
+        period="5m",
+        period_seconds=300,
+        scan_timeout=20.0,
+        device_clock="utc",
+        realtime=[],
+        realtime_samples=3,
+        realtime_duration=None,
+        realtime_until_keypress=False,
+    )
+    monkeypatch.setattr("h59_client.cli.refuse_if_daemon_running", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.write_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.clear_stale_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.subprocess.Popen", lambda *a, **k: type("P", (), {"pid": 123})())
+    metadata = {}
+    monkeypatch.setattr("h59_client.cli.write_metadata", lambda path, updates: metadata.update(updates) or metadata)
+    monkeypatch.setattr("h59_client.cli.resolve_runtime_paths", lambda args: (tmp_path / "state", tmp_path / "state" / "daemon.pid", tmp_path / "state" / "daemon.log", tmp_path / "state" / "daemon.json"))
+
+    assert spawn_daemon(args) == 123
+    assert metadata["post_sync_health_check"] is True
+
+
+def test_run_daemon_loop_forwards_post_sync_health_check(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    args = argparse.Namespace(
+        db="data/h59.sqlite",
+        selector="remi",
+        incremental=False,
+        period_seconds=300,
+        device_clock="utc",
+        config=None,
+        capture_gatt=False,
+        post_sync_health_check=True,
+        realtime=[],
+        realtime_samples=3,
+        realtime_duration=None,
+        scan_timeout=20.0,
+    )
+
+    handlers = {}
+    monkeypatch.setattr("h59_client.cli.signal.signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    monkeypatch.setattr("h59_client.cli.resolve_runtime_paths", lambda args: (state_dir, state_dir / "daemon.pid", state_dir / "daemon.log", state_dir / "daemon.json"))
+    monkeypatch.setattr("h59_client.cli.clear_stale_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.write_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.remove_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.configure_daemon_logging", lambda log_file: None)
+    monkeypatch.setattr("h59_client.cli.update_metadata", lambda path, updates: updates)
+    monkeypatch.setattr("h59_client.cli.read_metadata", lambda path: {})
+    monkeypatch.setattr("h59_client.cli.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("h59_client.cli.time.time", lambda: 1000.0)
+    monkeypatch.setattr("h59_client.cli.datetime", datetime)
+    monkeypatch.setattr("h59_client.cli.resolve_device_clock_mode", lambda cli_value, config_path: "utc")
+
+    captured = {}
+
+    async def fake_sync_h59(**kwargs):
+        captured.update(kwargs)
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return []
+
+    monkeypatch.setattr("h59_client.cli.sync_h59", fake_sync_h59)
+
+    assert run_daemon_loop(args) == 0
+    assert captured["post_sync_health_check"] is True
+
+
+def test_handle_sync_routes_post_sync_health_check_to_foreground(monkeypatch):
+    called = {}
+
+    def fake_run_foreground_sync(args):
+        called["args"] = args
+        return 0
+
+    monkeypatch.setattr("h59_client.cli.run_foreground_sync", fake_run_foreground_sync)
+
+    args = argparse.Namespace(
+        realtime_until_keypress=False,
+        realtime=[],
+        realtime_duration=None,
+        daemonize=False,
+        daemon_child=False,
+        post_sync_health_check=True,
+    )
+
+    assert handle_sync(args) == 0
+    assert called["args"].post_sync_health_check is True
+
 
 
 def test_default_runtime_paths_use_state_dir_override(tmp_path):
