@@ -176,6 +176,13 @@ Common flags:
 - `--device-clock <utc|local>`
 - `--config <path>`
 - `--capture-gatt`
+- `--post-sync-health-check`: after a successful history sync, run the default realtime `health-check` over the same BLE session and store the fresh cuff-pressure / final BP / heart-rate observations in `realtime_samples`
+
+Post-sync health check:
+- this is opt-in because it performs an active live measurement after history catch-up
+- it is intended for daemon use when fresh BP and heart-rate detail is needed more often than history exposes
+- if combined with `--realtime health-check`, the health-check is run only once for the sync cycle
+- daemon status records the effective mode and, after a successful cycle, the latest post-sync health-check summary when one was captured
 
 ### `realtime`
 

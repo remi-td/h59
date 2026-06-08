@@ -399,7 +399,7 @@ def test_sync_one_h59_runs_post_sync_health_check_once_and_persists_observations
     async def fake_query_capabilities(transport, device_clock_mode):
         return (capabilities, "cc", "2026-05-26T15:00:00+00:00")
 
-    async def fake_query_health_check(transport):
+    async def fake_query_health_check(transport, **_kwargs):
         return ([(hc_sample, "deadbeef", "2026-05-26T15:00:01+00:00")], (hc_sample, "deadbeef", "2026-05-26T15:00:01+00:00"))
 
     monkeypatch.setattr("h59_client.sync.connect_target", fake_connect_target)

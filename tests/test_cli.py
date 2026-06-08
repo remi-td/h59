@@ -209,6 +209,73 @@ def test_run_daemon_loop_forwards_post_sync_health_check(monkeypatch, tmp_path):
     assert captured["post_sync_health_check"] is True
 
 
+def test_run_daemon_loop_records_post_sync_health_check_status(monkeypatch, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    args = argparse.Namespace(
+        db="data/h59.sqlite",
+        selector="remi",
+        incremental=True,
+        period_seconds=300,
+        device_clock="utc",
+        config=None,
+        capture_gatt=False,
+        post_sync_health_check=True,
+        realtime=[],
+        realtime_samples=3,
+        realtime_duration=None,
+        scan_timeout=20.0,
+    )
+
+    handlers = {}
+    metadata_updates = []
+    monkeypatch.setattr("h59_client.cli.signal.signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    monkeypatch.setattr("h59_client.cli.resolve_runtime_paths", lambda args: (state_dir, state_dir / "daemon.pid", state_dir / "daemon.log", state_dir / "daemon.json"))
+    monkeypatch.setattr("h59_client.cli.clear_stale_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.write_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.remove_pidfile", lambda pid_file: None)
+    monkeypatch.setattr("h59_client.cli.configure_daemon_logging", lambda log_file: None)
+    monkeypatch.setattr("h59_client.cli.update_metadata", lambda path, updates: metadata_updates.append(updates) or updates)
+    monkeypatch.setattr("h59_client.cli.read_metadata", lambda path: {})
+    monkeypatch.setattr("h59_client.cli.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("h59_client.cli.time.time", lambda: 1000.0)
+    monkeypatch.setattr("h59_client.cli.datetime", datetime)
+    monkeypatch.setattr("h59_client.cli.resolve_device_clock_mode", lambda cli_value, config_path: "utc")
+
+    async def fake_sync_h59(**_kwargs):
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return [
+            {
+                "address": "AA:BB:CC:DD:EE:FF",
+                "sync_id": 12,
+                "incremental": True,
+                "queried_days": 1,
+                "captured_gatt": False,
+                "realtime_results": {
+                    "health-check": {
+                        "packets": 64,
+                        "final_result": {
+                            "systolic": 121,
+                            "diastolic": 80,
+                            "heart_rate": 65,
+                            "timestamp": "2026-06-08T18:27:45+00:00",
+                        },
+                    }
+                },
+            }
+        ]
+
+    monkeypatch.setattr("h59_client.cli.sync_h59", fake_sync_h59)
+
+    assert run_daemon_loop(args) == 0
+
+    initial_metadata = metadata_updates[0]
+    assert initial_metadata["post_sync_health_check"] is True
+    success_metadata = next(update for update in metadata_updates if update.get("last_cycle_result") == "ok:1")
+    assert success_metadata["last_cycle_health_check"]["systolic"] == 121
+    assert success_metadata["last_cycle_realtime_results"][0]["sync_id"] == 12
+
+
 def test_handle_sync_routes_post_sync_health_check_to_foreground(monkeypatch):
     called = {}
 
