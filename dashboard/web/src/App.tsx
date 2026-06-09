@@ -11,6 +11,7 @@ const Sleep = lazy(() => import("./pages/Sleep").then((module) => ({ default: mo
 const Heart = lazy(() => import("./pages/Heart").then((module) => ({ default: module.Heart })));
 const Oxygen = lazy(() => import("./pages/Oxygen").then((module) => ({ default: module.Oxygen })));
 const Activity = lazy(() => import("./pages/Activity").then((module) => ({ default: module.Activity })));
+const Explore = lazy(() => import("./pages/Explore").then((module) => ({ default: module.Explore })));
 const Device = lazy(() => import("./pages/Device").then((module) => ({ default: module.Device })));
 const Debug = lazy(() => import("./pages/Debug").then((module) => ({ default: module.Debug })));
 
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   ["Heart", "/heart"],
   ["Oxygen", "/oxygen"],
   ["Activity", "/activity"],
+  ["Explore", "/explore"],
   ["Device", "/device"],
   ["Debug", "/debug"],
 ] as const;
@@ -89,6 +91,7 @@ export default function App() {
             <Route path="/heart" element={<Heart device={device} />} />
             <Route path="/oxygen" element={<Oxygen device={device} />} />
             <Route path="/activity" element={<Activity device={device} />} />
+            <Route path="/explore" element={<Explore device={device} />} />
             <Route path="/device" element={<Device device={device} />} />
             <Route path="/debug" element={<Debug device={device} />} />
           </Routes>

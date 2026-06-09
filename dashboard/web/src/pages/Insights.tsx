@@ -3,14 +3,15 @@ import { formatDateTime, formatDurationMinutes } from "../lib/format";
 
 type ScoreTone = "good" | "watch" | "alert" | "neutral";
 
-function scoreTone(score: number, inverse = false): ScoreTone {
+function scoreTone(score: number | null | undefined, inverse = false): ScoreTone {
+  const safeScore = score ?? 0;
   if (inverse) {
-    if (score >= 18) return "alert";
-    if (score >= 14) return "watch";
+    if (safeScore >= 18) return "alert";
+    if (safeScore >= 14) return "watch";
     return "good";
   }
-  if (score >= 80) return "good";
-  if (score >= 60) return "watch";
+  if (safeScore >= 80) return "good";
+  if (safeScore >= 60) return "watch";
   return "alert";
 }
 
@@ -19,18 +20,19 @@ function sentenceCase(value: string | null | undefined): string {
   return value.replace(/_/g, " ").replace(/^./, (char) => char.toUpperCase());
 }
 
-function ScoreCard({ title, score, band, tone, detail }: { title: string; score: number; band: string; tone: ScoreTone; detail?: string }) {
-  const clamped = Math.max(0, Math.min(100, score));
+function ScoreCard({ title, score, band, tone, detail }: { title: string; score?: number | null; band?: string | null; tone: ScoreTone; detail?: string }) {
+  const safeScore = score ?? 0;
+  const clamped = Math.max(0, Math.min(100, safeScore));
   return (
     <article className={`insight-score-card insight-tone-${tone}`}>
       <div className="insight-score-card-top">
         <div>
           <p className="eyebrow">{title}</p>
-          <h3>{score.toFixed(1)}</h3>
+          <h3>{safeScore.toFixed(1)}</h3>
         </div>
         <span className="insight-band">{sentenceCase(band)}</span>
       </div>
-      <div className="insight-meter" aria-label={`${title} score ${score.toFixed(1)}`}>
+      <div className="insight-meter" aria-label={`${title} score ${safeScore.toFixed(1)}`}>
         <span style={{ width: `${clamped}%` }} />
       </div>
       {detail ? <p className="metric-subtitle">{detail}</p> : null}
@@ -87,7 +89,7 @@ export function Insights({ device }: { device: string }) {
       />
 
       <section className="insight-score-grid">
-        <ScoreCard title="Readiness" score={data.readiness.score} band={data.readiness.band} tone={scoreTone(data.readiness.score)} />
+        <ScoreCard title="Readiness" score={data.readiness.score_0_100 ?? data.readiness.score} band={data.readiness.label ?? data.readiness.band} tone={scoreTone(data.readiness.score_0_100 ?? data.readiness.score)} />
         <ScoreCard
           title="Sleep"
           score={data.sleep.score}
@@ -95,8 +97,46 @@ export function Insights({ device }: { device: string }) {
           tone={scoreTone(data.sleep.score)}
           detail={data.sleep.duration_minutes ? `${data.sleep.duration_minutes} minutes of sleep captured` : "No sleep duration available"}
         />
-        <ScoreCard title="Strain" score={data.strain.score} band={data.strain.band} tone={scoreTone(data.strain.score, true)} detail="Activity-load based strain estimate" />
+        <ScoreCard title="Strain" score={data.strain.score_0_100 ?? data.strain.score} band={data.strain.label ?? data.strain.band} tone={scoreTone(data.strain.score_0_100 ?? data.strain.score, true)} detail="Activity-load based strain estimate" />
       </section>
+
+      {data.readiness.drivers_positive?.length || data.readiness.drivers_negative?.length ? (
+        <section className="insight-detail-grid">
+          <article className="chart-panel">
+            <div className="chart-panel-header">
+              <div>
+                <p className="eyebrow">Feature attribution</p>
+                <h3>Positive drivers</h3>
+              </div>
+            </div>
+            <ul className="insight-list">
+              {(data.readiness.drivers_positive ?? []).map((driver) => (
+                <li key={`positive-${driver.metric_key}`}>
+                  {driver.label}: {driver.reason ?? "supportive signal"}
+                </li>
+              ))}
+            </ul>
+          </article>
+          <article className="chart-panel">
+            <div className="chart-panel-header">
+              <div>
+                <p className="eyebrow">Feature attribution</p>
+                <h3>Negative drivers</h3>
+              </div>
+            </div>
+            <ul className="insight-list">
+              {(data.readiness.drivers_negative ?? []).map((driver) => (
+                <li key={`negative-${driver.metric_key}`}>
+                  {driver.label}: {driver.reason ?? "dragging signal"}
+                </li>
+              ))}
+              {(data.readiness.omitted_terms ?? []).map((term) => (
+                <li key={`omitted-${term}`}>Omitted: {term}</li>
+              ))}
+            </ul>
+          </article>
+        </section>
+      ) : null}
 
       <section className="insight-detail-grid">
         <article className="chart-panel">

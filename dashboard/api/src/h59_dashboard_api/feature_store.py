@@ -285,13 +285,13 @@ def behavior_effect_payload(conn: sqlite3.Connection, event_key: str, target_met
     for row in daily:
         is_event = False
         if event_key == "high-step-day":
-            is_event = (row.get("steps_total") or 0) >= step_threshold
+            is_event = (row["steps_total"] or 0) >= step_threshold
         elif event_key == "low-sleep-night":
-            is_event = (row.get("sleep_total_minutes") or 0) < 360
+            is_event = (row["sleep_total_minutes"] or 0) < 360
         elif event_key == "high-pressure-day":
-            is_event = (row.get("pressure_avg") or 0) >= 40
+            is_event = (row["pressure_avg"] or 0) >= 40
         elif event_key == "bp-measurement-day":
-            is_event = row.get("systolic_bp_latest") is not None
+            is_event = row["systolic_bp_latest"] is not None
         target_date = (dt.date.fromisoformat(row["day_value"]) + dt.timedelta(days=lag_days)).isoformat()
         if target_date in target:
             (values_with if is_event else values_without).append(target[target_date])
