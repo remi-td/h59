@@ -35,6 +35,9 @@ REQUIRED_ANALYTIC_VIEWS = {
     "health_daily_features",
     "health_metric_observations",
     "health_metric_baselines",
+    "health_feature_observations",
+    "health_daily_feature_store",
+    "health_feature_baselines",
 }
 
 # View names alone are not enough: analytic view definitions evolve over time,
@@ -44,6 +47,9 @@ REQUIRED_ANALYTIC_VIEWS = {
 REQUIRED_ANALYTIC_VIEW_COLUMNS = {
     "analytic_sleep_sessions_canonical": {"effective_minutes"},
     "health_daily_features": {"observation_as_of", "sleep_effective_minutes", "systolic_bp_latest", "diastolic_bp_latest"},
+    "health_feature_observations": {"feature_name", "feature_value", "confidence", "observation_as_of", "approximation_label"},
+    "health_daily_feature_store": {"sleep_efficiency_pct", "strain_score_0_21", "data_quality_state"},
+    "health_feature_baselines": {"sample_count", "median", "mean_abs_deviation", "baseline_status"},
 }
 
 

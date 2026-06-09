@@ -13,6 +13,9 @@ from typing import Any
 
 
 ANALYTIC_VIEWS_SQL = """
+DROP VIEW IF EXISTS health_feature_baselines;
+DROP VIEW IF EXISTS health_daily_feature_store;
+DROP VIEW IF EXISTS health_feature_observations;
 DROP VIEW IF EXISTS health_metric_baselines;
 DROP VIEW IF EXISTS health_metric_observations;
 DROP VIEW IF EXISTS health_daily_features;
@@ -477,6 +480,135 @@ SELECT
     END AS quality
 FROM numbered
 GROUP BY device_id, metric, as_of_day, window_days;
+
+CREATE VIEW IF NOT EXISTS health_feature_observations AS
+SELECT device_id, 'hr.daily_avg_bpm' AS feature_name, avg_hr AS feature_value, 'bpm' AS unit, valid_from, valid_to, day_value AS feature_date,
+       'derived' AS source_kind, 'heart_rates' AS source_table, NULL AS source_id,
+       CASE WHEN hr_sample_count >= 6 THEN 'complete' WHEN hr_sample_count > 0 THEN 'partial' ELSE 'missing' END AS data_quality_state,
+       CASE WHEN hr_sample_count >= 6 THEN 0.85 ELSE 0.55 END AS confidence,
+       observation_as_of, 'observed' AS approximation_label
+FROM health_daily_features WHERE avg_hr IS NOT NULL
+UNION ALL SELECT device_id, 'hr.resting_sleep_bpm', resting_hr_bpm, 'bpm', valid_from, valid_to, day_value,
+       'derived', 'heart_rates', NULL,
+       CASE WHEN sleep_total_minutes IS NOT NULL THEN 'complete' ELSE 'partial' END,
+       CASE WHEN sleep_total_minutes IS NOT NULL THEN 0.75 ELSE 0.45 END,
+       observation_as_of, CASE WHEN sleep_total_minutes IS NOT NULL THEN 'observed' ELSE 'heuristic' END
+FROM health_daily_features WHERE resting_hr_bpm IS NOT NULL
+UNION ALL SELECT device_id, 'hrv.daily_median', hrv_avg, 'ms', valid_from, valid_to, day_value,
+       'derived', 'hrv_samples', NULL,
+       CASE WHEN hrv_sample_count >= 3 THEN 'complete' WHEN hrv_sample_count > 0 THEN 'partial' ELSE 'missing' END,
+       CASE WHEN hrv_sample_count >= 3 THEN 0.75 ELSE 0.5 END,
+       observation_as_of, 'vendor_derived'
+FROM health_daily_features WHERE hrv_avg IS NOT NULL
+UNION ALL SELECT device_id, 'sleep.total_minutes', sleep_total_minutes, 'minutes', valid_from, valid_to, day_value,
+       'derived', 'sleep_sessions', NULL,
+       CASE WHEN sleep_total_minutes IS NOT NULL THEN 'complete' ELSE 'missing' END,
+       0.8, observation_as_of, 'observed'
+FROM health_daily_features WHERE sleep_total_minutes IS NOT NULL
+UNION ALL SELECT device_id, 'sleep.effective_minutes', sleep_effective_minutes, 'minutes', valid_from, valid_to, day_value,
+       'derived', 'sleep_sessions', NULL,
+       CASE WHEN no_data_minutes IS NOT NULL AND no_data_minutes > 0 THEN 'partial' ELSE 'complete' END,
+       CASE WHEN no_data_minutes IS NOT NULL AND no_data_minutes > 0 THEN 0.65 ELSE 0.8 END,
+       observation_as_of, 'observed'
+FROM health_daily_features WHERE sleep_effective_minutes IS NOT NULL
+UNION ALL SELECT device_id, 'sleep.efficiency_pct', ROUND(100.0 * sleep_effective_minutes / NULLIF(sleep_total_minutes, 0), 1), 'percent', valid_from, valid_to, day_value,
+       'derived', 'sleep_sessions', NULL,
+       CASE WHEN no_data_minutes IS NOT NULL AND no_data_minutes > 0 THEN 'partial' ELSE 'complete' END,
+       CASE WHEN no_data_minutes IS NOT NULL AND no_data_minutes > 0 THEN 0.6 ELSE 0.75 END,
+       observation_as_of, 'heuristic'
+FROM health_daily_features WHERE sleep_effective_minutes IS NOT NULL AND sleep_total_minutes IS NOT NULL AND sleep_total_minutes > 0
+UNION ALL SELECT device_id, 'sleep.restorative_minutes', COALESCE(deep_minutes, 0) + COALESCE(rem_minutes, 0), 'minutes', valid_from, valid_to, day_value,
+       'derived', 'sleep_stage_samples', NULL, 'partial', 0.6, observation_as_of, 'heuristic'
+FROM health_daily_features WHERE deep_minutes IS NOT NULL OR rem_minutes IS NOT NULL
+UNION ALL SELECT device_id, 'sleep.stage_deep_pct', ROUND(100.0 * deep_minutes / NULLIF(sleep_total_minutes, 0), 1), 'percent', valid_from, valid_to, day_value,
+       'derived', 'sleep_stage_samples', NULL, 'partial', 0.55, observation_as_of, 'heuristic'
+FROM health_daily_features WHERE deep_minutes IS NOT NULL AND sleep_total_minutes > 0
+UNION ALL SELECT device_id, 'sleep.stage_rem_pct', ROUND(100.0 * rem_minutes / NULLIF(sleep_total_minutes, 0), 1), 'percent', valid_from, valid_to, day_value,
+       'derived', 'sleep_stage_samples', NULL, 'partial', 0.55, observation_as_of, 'heuristic'
+FROM health_daily_features WHERE rem_minutes IS NOT NULL AND sleep_total_minutes > 0
+UNION ALL SELECT device_id, 'activity.steps_total', steps_total, 'steps', valid_from, valid_to, day_value,
+       'raw', 'sport_details', NULL, CASE WHEN steps_total IS NOT NULL THEN 'complete' ELSE 'missing' END, 0.85, observation_as_of, 'observed'
+FROM health_daily_features WHERE steps_total IS NOT NULL
+UNION ALL SELECT device_id, 'activity.distance_total', distance_total, 'm', valid_from, valid_to, day_value,
+       'raw', 'sport_details', NULL, 'complete', 0.8, observation_as_of, 'observed'
+FROM health_daily_features WHERE distance_total IS NOT NULL
+UNION ALL SELECT device_id, 'activity.calories_total', calories_total, 'kcal', valid_from, valid_to, day_value,
+       'raw', 'sport_details', NULL, 'partial', 0.65, observation_as_of, 'vendor_derived'
+FROM health_daily_features WHERE calories_total IS NOT NULL
+UNION ALL SELECT device_id, 'strain.activity_load', activity_load, 'load', valid_from, valid_to, day_value,
+       'derived', 'sport_details', NULL, 'partial', 0.55, observation_as_of, 'heuristic'
+FROM health_daily_features WHERE activity_load IS NOT NULL
+UNION ALL SELECT device_id, 'stress.pressure_avg', pressure_avg, 'score', valid_from, valid_to, day_value,
+       'derived', 'pressure_samples', NULL, CASE WHEN pressure_sample_count >= 3 THEN 'complete' ELSE 'partial' END, 0.65, observation_as_of, 'vendor_derived'
+FROM health_daily_features WHERE pressure_avg IS NOT NULL
+UNION ALL SELECT device_id, 'spo2.avg', spo2_avg, 'percent', valid_from, valid_to, day_value,
+       'derived', 'blood_oxygen_samples', NULL, 'partial', 0.65, observation_as_of, 'observed'
+FROM health_daily_features WHERE spo2_avg IS NOT NULL
+UNION ALL SELECT device_id, 'spo2.min', spo2_min, 'percent', valid_from, valid_to, day_value,
+       'derived', 'blood_oxygen_samples', NULL, 'partial', 0.6, observation_as_of, 'observed'
+FROM health_daily_features WHERE spo2_min IS NOT NULL
+UNION ALL SELECT device_id, 'bp.latest_systolic', systolic_bp_latest, 'mmHg', valid_from, valid_to, day_value,
+       'realtime', 'analytic_blood_pressure_intervals', NULL, 'partial', 0.7, observation_as_of, 'observed'
+FROM health_daily_features WHERE systolic_bp_latest IS NOT NULL
+UNION ALL SELECT device_id, 'bp.latest_diastolic', diastolic_bp_latest, 'mmHg', valid_from, valid_to, day_value,
+       'realtime', 'analytic_blood_pressure_intervals', NULL, 'partial', 0.7, observation_as_of, 'observed'
+FROM health_daily_features WHERE diastolic_bp_latest IS NOT NULL;
+
+CREATE VIEW IF NOT EXISTS health_daily_feature_store AS
+SELECT
+    hdf.*,
+    ROUND(100.0 * sleep_effective_minutes / NULLIF(sleep_total_minutes, 0), 1) AS sleep_efficiency_pct,
+    COALESCE(deep_minutes, 0) + COALESCE(rem_minutes, 0) AS sleep_restorative_minutes,
+    ROUND(100.0 * (COALESCE(deep_minutes, 0) + COALESCE(rem_minutes, 0)) / NULLIF(sleep_total_minutes, 0), 1) AS sleep_restorative_pct,
+    awake_minutes AS sleep_waso_minutes,
+    CASE WHEN awake_minutes IS NULL THEN NULL ELSE MAX(CAST(awake_minutes / 5 AS INTEGER), 0) END AS sleep_disturbance_count,
+    ROUND((COALESCE(activity_load, 0) * 1.5) + (COALESCE(max_hr, avg_hr, resting_hr_bpm, 0) - COALESCE(resting_hr_bpm, 60)) / 10.0, 2) AS strain_score_0_21,
+    CASE
+        WHEN data_quality_score >= 70 THEN 'complete'
+        WHEN data_quality_score >= 35 THEN 'partial'
+        ELSE 'sparse'
+    END AS data_quality_state
+FROM health_daily_features AS hdf;
+
+CREATE VIEW IF NOT EXISTS health_feature_baselines AS
+WITH windows(window_days) AS (VALUES (7), (14), (30), (60)),
+base AS (
+    SELECT cur.device_id, cur.feature_name, cur.feature_date AS as_of_date, w.window_days,
+           hist.feature_value, hist.observation_as_of
+    FROM health_feature_observations AS cur
+    CROSS JOIN windows AS w
+    JOIN health_feature_observations AS hist
+      ON hist.device_id = cur.device_id
+     AND hist.feature_name = cur.feature_name
+     AND hist.feature_date >= date(cur.feature_date, '-' || (w.window_days - 1) || ' days')
+     AND hist.feature_date <= cur.feature_date
+), numbered AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY device_id, feature_name, as_of_date, window_days ORDER BY feature_value) AS rn,
+           COUNT(*) OVER (PARTITION BY device_id, feature_name, as_of_date, window_days) AS cnt,
+           AVG(feature_value) OVER (PARTITION BY device_id, feature_name, as_of_date, window_days) AS avg_value
+    FROM base
+)
+SELECT
+    device_id,
+    feature_name,
+    as_of_date,
+    window_days,
+    COUNT(*) AS sample_count,
+    ROUND(AVG(feature_value), 3) AS mean,
+    ROUND(AVG(CASE WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN feature_value END), 3) AS median,
+    MIN(feature_value) AS min,
+    MAX(feature_value) AS max,
+    ROUND(AVG(ABS(feature_value - avg_value)), 3) AS mean_abs_deviation,
+    MAX(observation_as_of) AS latest_observation_as_of,
+    CASE
+        WHEN MAX(observation_as_of) < datetime(as_of_date || 'T00:00:00+00:00', '-3 days') THEN 'stale'
+        WHEN COUNT(*) >= 14 THEN 'trusted'
+        WHEN COUNT(*) >= 7 THEN 'provisional'
+        ELSE 'calibrating'
+    END AS baseline_status
+FROM numbered
+GROUP BY device_id, feature_name, as_of_date, window_days;
 """
 
 

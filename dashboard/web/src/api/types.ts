@@ -30,9 +30,28 @@ export interface SyncContext {
   warning?: string | null;
 }
 
+export interface InsightDriver {
+  metric_key: string;
+  label: string;
+  direction?: string | null;
+  value?: number | null;
+  unit?: string | null;
+  baseline?: number | null;
+  z_score?: number | null;
+  contribution?: number | null;
+  confidence?: number | null;
+  reason?: string | null;
+}
+
 export interface InsightScore {
-  score: number;
-  band: string;
+  score?: number | null;
+  score_0_100?: number | null;
+  band?: string | null;
+  label?: string | null;
+  components?: Record<string, number | string | null>;
+  drivers_positive?: InsightDriver[];
+  drivers_negative?: InsightDriver[];
+  omitted_terms?: string[];
 }
 
 export interface InsightSleep {
@@ -54,6 +73,80 @@ export interface CurrentInsightResponse {
   safety_flags: string[];
   recommended_action: string;
   llm_guardrails: string[];
+  feature_context?: Record<string, string | number | null>;
+}
+
+export interface MetricCatalogItem {
+  metric_key: string;
+  label: string;
+  unit?: string | null;
+  domain: string;
+  description: string;
+  source: string;
+  aggregation: string;
+  default_range_days: number;
+  higher_is_better?: boolean | null;
+  approximation_level: string;
+}
+
+export interface MetricCatalogResponse {
+  metrics: MetricCatalogItem[];
+  count: number;
+}
+
+export interface FeatureBaseline {
+  baseline_value?: number | null;
+  median?: number | null;
+  avg?: number | null;
+  min?: number | null;
+  max?: number | null;
+  spread?: number | null;
+  sample_count?: number | null;
+  baseline_window_days?: number | null;
+}
+
+export interface FeatureObservation {
+  feature_date: string;
+  metric_key: string;
+  metric_label?: string | null;
+  domain?: string | null;
+  value?: number | null;
+  unit?: string | null;
+  confidence?: number | null;
+  data_quality_state?: string | null;
+  sample_count?: number | null;
+  source?: string | null;
+  observation_as_of?: string | null;
+  baseline?: FeatureBaseline | null;
+}
+
+export interface FeatureSeries {
+  metric_key: string;
+  label: string;
+  unit?: string | null;
+  observations: FeatureObservation[];
+}
+
+export interface FeatureSeriesResponse {
+  device?: DeviceSummary | null;
+  metrics: string[];
+  include_baselines: boolean;
+  series: FeatureSeries[];
+  time_context: TimeContext;
+}
+
+export interface DailyFeatureValue {
+  value?: number | null;
+  unit?: string | null;
+  approximation_level?: string | null;
+}
+
+export interface DailyFeaturesResponse {
+  device_id?: number | null;
+  feature_date?: string | null;
+  observation_as_of?: string | null;
+  data_quality_state?: string | null;
+  features: Record<string, DailyFeatureValue>;
 }
 
 export interface MetricSummary {
