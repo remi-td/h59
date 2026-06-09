@@ -119,6 +119,76 @@ Adding a metric requires:
 - `pressure_samples` must be described as a pressure/stress-like vendor score.
 - Abnormal BP/SpO2 values should trigger conservative repeat-measurement wording, not diagnosis.
 
+## Operational upgrade notes
+
+This sprint is designed as an in-place upgrade for users already running H59.
+
+### Database upgrade behavior
+
+No destructive migration or manual backfill is required. The raw SQLite tables remain the source of truth, and the new analytics surfaces are deterministic views over existing history.
+
+On dashboard/API startup, and before analytics payloads are served, `ensure_analytic_surface` validates the analytic views and rebuilds them when they are missing or stale. This covers both new installs and existing databases that still contain older `CREATE VIEW` definitions.
+
+Expected new or refreshed views:
+
+- `health_feature_observations`
+- `health_daily_feature_store`
+- `health_feature_baselines`
+- compatibility views: `health_daily_features`, `health_metric_observations`, `health_metric_baselines`
+
+A current user can therefore upgrade code, restart the dashboard API, and let the first analytics request rebuild the view layer. If needed, operators can verify the active database with:
+
+```bash
+h59 db path
+sqlite3 "$(h59 db path)" ".tables"
+```
+
+The feature-store views are safe to drop and recreate because they do not own source data.
+
+### Dashboard restart procedure
+
+After deploying the new code, restart the dashboard services so the API and web bundle pick up the new endpoints and Explore page.
+
+For the repository dashboard runner:
+
+```bash
+cd dashboard
+./run.sh stop
+./run.sh start --db "$(h59 db path)"
+./run.sh status
+curl -fsS http://127.0.0.1:8000/api/health
+```
+
+If the API was started with a database override, verify `/api/health` reports the expected active database path after restart.
+
+### Scheduled work
+
+No new scheduler, cron job, daemon flag, or materialized-table refresh task is required for this sprint. Existing device sync schedules can continue unchanged.
+
+The new analytics are intentionally query-time/replay-time views plus Python payload builders. Add scheduled materialization only if production measurements show that view latency is a real problem.
+
+### What's new after upgrade
+
+Users and downstream tools gain:
+
+- `/api/metrics/catalog` for stable metric metadata.
+- `/api/features` and `/api/features/daily` for reusable feature-store rows.
+- sleep, strain, workout, trend, compare, correlation, and behavior-effect API surfaces.
+- expanded `/api/insights/current` readiness attribution with positive/negative drivers, omitted terms, and feature context.
+- dashboard Explore page for catalog-backed feature observations.
+
+### Post-upgrade verification
+
+Recommended checks after upgrade:
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/metrics/catalog
+curl -fsS "http://127.0.0.1:8000/api/features?device=preferred&metric_key=sleep.total_minutes&include_baseline=true"
+curl -fsS "http://127.0.0.1:8000/api/insights/current?device=preferred"
+```
+
+The bracelet does not need to be nearby for these checks; they replay from existing SQLite history.
+
 ## Technical-debt cleanup opportunities in this sprint
 
 - Centralize metric metadata instead of scattering labels/units across dashboard cards.
